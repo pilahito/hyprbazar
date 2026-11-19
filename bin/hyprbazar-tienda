@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hyprshelf-tienda — buscador e instalador de temas de la comunidad.
+# hyprbazar-tienda — buscador e instalador de temas de la comunidad.
 #
 # Busca en GitHub repositorios de temas/dotfiles para Hyprland, traduce su
 # descripción al español y, al instalar, se queda solo con lo aprovechable:

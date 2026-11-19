@@ -45,7 +45,7 @@ def _local_bin(nombre, alternativo):
     return Path.home() / ".local" / "bin" / alternativo
 
 
-PALETA = _local_bin("hyprshelf-paleta", "paleta")
+PALETA = _local_bin("hyprbazar-paleta", "paleta")
 CSS_APP = """
 .wall-card { border-radius: 14px; padding: 0; background: alpha(currentColor, 0.05); }
 .wall-card:hover { background: alpha(currentColor, 0.09); }
@@ -85,7 +85,7 @@ def _cargar_css(css):
         Gdk.Display.get_default(), proveedor, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
     )
     aplicados.add(css)
-TIENDA = _local_bin("hyprshelf-tienda", "tienda")
+TIENDA = _local_bin("hyprbazar-tienda", "tienda")
 
 
 # ────────────────────────────── datos ───────────────────────────────────────
@@ -1104,7 +1104,7 @@ def _descargar(url: str, destino: Path) -> bool:
 # ────────────────────────────── app ─────────────────────────────────────────
 class App(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id="es.david.TemasHyprland")
+        super().__init__(application_id="es.david.HyprBazar")
         self.ventana = None
 
     def do_activate(self):

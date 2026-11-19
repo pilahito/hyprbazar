@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — instala HyprShelf en el sistema del usuario.
+# install.sh — instala HyprBazar en el sistema del usuario.
 #
 #   ./install.sh            instala/actualiza
 #   ./install.sh --check    solo comprueba dependencias
@@ -32,34 +32,34 @@ if [ ${#falta[@]} -ne 0 ]; then
 fi
 
 mkdir -p "$BIN" "$APPS"
-for f in hyprshelf hyprshelf-paleta hyprshelf-tienda; do
+for f in hyprbazar hyprbazar-paleta hyprbazar-tienda; do
     install -m 755 "$AQUI/bin/$f" "$BIN/$f"
     echo "  $f -> $BIN/$f"
 done
 
-cat > "$APPS/hyprshelf.desktop" <<'DESK'
+cat > "$APPS/hyprbazar.desktop" <<'DESK'
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=HyprShelf
+Name=HyprBazar
 Comment=Temas, fondos y paletas para Hyprland
-Exec=hyprshelf
+Exec=hyprbazar
 Icon=preferences-desktop-theme
 Terminal=false
 Categories=Settings;DesktopSettings;
 Keywords=tema;temas;fondo;wallpaper;paleta;hyprland;
-StartupWMClass=hyprshelf
+StartupWMClass=hyprbazar
 DESK
 update-desktop-database "$APPS" >/dev/null 2>&1 || true
 
 cat <<'FIN'
 
-Instalado. Para abrirlo:  hyprshelf   (o búscalo como "HyprShelf" en el menú)
+Instalado. Para abrirlo:  hyprbazar   (o búscalo como "HyprBazar" en el menú)
 
 Atajo recomendado — añade esto a tu ~/.config/hypr/dms/binds-user.lua:
 
-  hl.bind("SUPER + SHIFT + Y", hl.dsp.exec_cmd("hyprshelf"),
-          { description = "HyprShelf (temas)" })
+  hl.bind("SUPER + SHIFT + Y", hl.dsp.exec_cmd("hyprbazar"),
+          { description = "HyprBazar (temas)" })
 
 y recarga Hyprland.
 FIN

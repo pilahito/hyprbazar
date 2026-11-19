@@ -1,4 +1,4 @@
-# HyprShelf
+# HyprBazar
 
 **Estantería de temas para Hyprland**: elige fondos de pantalla, aplica paletas de
 color completas y descarga temas de la comunidad, todo desde una ventana, en
@@ -30,8 +30,8 @@ Y dos cosas que casi nadie hace bien:
 ## Instalación
 
 ```bash
-git clone https://github.com/pilahito/hyprshelf.git
-cd hyprshelf
+git clone https://github.com/pilahito/hyprbazar.git
+cd hyprbazar
 ./install.sh
 ```
 
@@ -48,19 +48,19 @@ sudo pacman -S python-gobject gtk4 imagemagick jq curl git wl-clipboard
 ## Uso
 
 ```bash
-hyprshelf                 # abre la ventana
-hyprshelf-paleta listar   # temas de color disponibles
-hyprshelf-paleta aplicar dracula --fondo
-hyprshelf-paleta restaurar
-hyprshelf-tienda buscar "hyprland themes"
-hyprshelf-tienda instalar victorsosaMx/hyperland
+hyprbazar                 # abre la ventana
+hyprbazar-paleta listar   # temas de color disponibles
+hyprbazar-paleta aplicar dracula --fondo
+hyprbazar-paleta restaurar
+hyprbazar-tienda buscar "hyprland themes"
+hyprbazar-tienda instalar victorsosaMx/hyperland
 ```
 
 Atajo sugerido, en tu `binds-user.lua`:
 
 ```lua
-hl.bind("SUPER + SHIFT + Y", hl.dsp.exec_cmd("hyprshelf"),
-        { description = "HyprShelf (temas)" })
+hl.bind("SUPER + SHIFT + Y", hl.dsp.exec_cmd("hyprbazar"),
+        { description = "HyprBazar (temas)" })
 ```
 
 ## Dónde guarda las cosas
@@ -92,13 +92,13 @@ automático depende de DMS/matugen.
 
 ## English
 
-**HyprShelf** is a theme shelf for Hyprland: pick wallpapers, apply full color
+**HyprBazar** is a theme shelf for Hyprland: pick wallpapers, apply full color
 palettes and browse a community store — all in one window. The store searches
 GitHub, shows real screenshots, translates descriptions to Spanish and downloads
 only palettes and wallpapers: it never overwrites your dotfiles.
 
 ```bash
-git clone https://github.com/pilahito/hyprshelf.git && cd hyprshelf && ./install.sh
+git clone https://github.com/pilahito/hyprbazar.git && cd hyprbazar && ./install.sh
 ```
 
 Requires Python 3 + PyGObject (GTK 4), ImageMagick, jq, curl and git.
