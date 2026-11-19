@@ -9,6 +9,7 @@ español y sin tocar tu configuración.
 <p align="center">
   <img src="docs/tienda.png" width="72%" alt="Tienda de temas de la comunidad">
   <img src="docs/temas-de-color.png" width="26%" alt="Paletas de color">
+  <img src="docs/complementos.png" width="72%" alt="Complementos de Hyprland">
 </p>
 
 ---
@@ -19,6 +20,7 @@ español y sin tocar tu configuración.
 |---|---|
 | **Fondos de pantalla** | todos tus fondos con su miniatura; un clic lo pone en todos los monitores y DMS recolorea el escritorio a partir de él |
 | **Temas de color** | paletas completas (Catppuccin, Dracula, Nord, Tokyo Night, Kanagawa, Arch…) con **vista previa generada**; aplica bordes, esquinas, huecos, desenfoque, barra de título y colores de kitty |
+| **Complementos** | estado de los plugins de Hyprland (hyprbars, borders-plus-plus, hyprfocus, csgo-vulkan-fix): activarlos, desactivarlos, recompilarlos y actualizar sus fuentes |
 | **Tienda** | busca temas en GitHub, muestra la **captura real** de cada repo, **traduce la descripción al español** y descarga solo lo aprovechable (paletas y fondos) |
 
 Y dos cosas que casi nadie hace bien:

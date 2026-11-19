@@ -291,6 +291,9 @@ class Ventana(Gtk.ApplicationWindow):
 
         self.pagina_tienda = TiendaPage(self)
         self.pila.add_titled(self.pagina_tienda, "tienda", "Tienda")
+
+        self.pagina_complementos = ComplementosPage(self)
+        self.pila.add_titled(self.pagina_complementos, "complementos", "Complementos")
         self.pila.connect("notify::visible-child", self.on_cambio_pagina)
 
         self.set_child(self.pila)
@@ -300,6 +303,8 @@ class Ventana(Gtk.ApplicationWindow):
             if os.environ.get("TEMAS_PALETAS") == "1":
                 self.pila.set_visible_child_name("paletas")
                 self.pagina_paletas.generar_previas()
+            if os.environ.get("TEMAS_COMPLEMENTOS") == "1":
+                self.pila.set_visible_child_name("complementos")
             if os.environ.get("TEMAS_TIENDA") == "1":
                 self.pila.set_visible_child_name("tienda")
                 consulta = os.environ.get("TEMAS_BUSCAR", "").strip()
@@ -1075,6 +1080,207 @@ class TiendaPage(Gtk.Box):
         self.ventana.pagina_paletas.cargar()
         self.ventana.pagina_paletas.generar_previas()
         return False
+
+
+
+# ────────────────────────────── complementos ────────────────────────────────
+# Plugins de Hyprland que suele usar este escritorio. La descripción va en
+# español y fija: así la pestaña funciona aunque no haya red.
+COMPLEMENTOS = {
+    "hyprbars": ("Barras de título con botones",
+                 "Dibuja una barra en cada ventana con los botones de minimizar, "
+                 "maximizar y cerrar (es la que usas ahora)."),
+    "borders-plus-plus": ("Bordes extra y degradados",
+                          "Añade bordes alrededor de las ventanas activas, con "
+                          "soporte de colores y degradados."),
+    "hyprfocus": ("Resalta la ventana activa",
+                  "Ilumina la ventana que tiene el foco durante un instante, para "
+                  "no perder de vista dónde estás escribiendo."),
+    "csgo-vulkan-fix": ("Arreglo para CS:GO con Vulkan",
+                        "Corrige el tamaño y la posición de ventana de CS:GO cuando "
+                        "se ejecuta con Vulkan."),
+}
+
+
+class ComplementosPage(Gtk.Box):
+    """Complementos (plugins) de Hyprland: estado y activarlos o recompilarlos."""
+
+    def __init__(self, ventana):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.ventana = ventana
+        self.fuentes = Path.home() / ".local" / "share" / "hyprland-plugins"
+
+        barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        barra.add_css_class("page-toolbar")
+
+        titulo = Gtk.Label(label="Complementos de Hyprland")
+        titulo.set_xalign(0)
+        titulo.set_hexpand(True)
+        titulo.add_css_class("store-desc")
+        barra.append(titulo)
+
+        actualizar = Gtk.Button(label="Actualizar fuentes")
+        actualizar.set_tooltip_text("Trae los últimos cambios de los complementos")
+        actualizar.add_css_class("flat")
+        actualizar.connect("clicked", self.on_actualizar)
+        barra.append(actualizar)
+
+        self.estado = Gtk.Label(label="")
+        self.estado.set_xalign(0)
+        self.estado.add_css_class("page-footer-text")
+        pie = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        pie.add_css_class("page-footer")
+        pie.append(self.estado)
+
+        self.flujo = Gtk.FlowBox()
+        self.flujo.set_valign(Gtk.Align.START)
+        self.flujo.set_homogeneous(True)
+        self.flujo.set_max_children_per_line(2)
+        self.flujo.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.flujo.set_margin_top(8)
+        self.flujo.set_margin_bottom(12)
+        self.flujo.set_margin_start(14)
+        self.flujo.set_margin_end(14)
+        self.flujo.set_row_spacing(10)
+        self.flujo.set_column_spacing(10)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_child(self.flujo)
+
+        self.append(barra)
+        self.append(scroll)
+        self.append(pie)
+        self.cargar()
+
+    # ── estado ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def cargados():
+        """Nombres de los complementos cargados ahora mismo en Hyprland."""
+        try:
+            r = subprocess.run(["hyprctl", "plugin", "list"],
+                               capture_output=True, text=True, timeout=10)
+        except Exception:
+            return set()
+        nombres = set()
+        for linea in r.stdout.splitlines():
+            if linea.startswith("Plugin "):
+                nombres.add(linea.split("Plugin ", 1)[1].split(" by", 1)[0].strip())
+        return nombres
+
+    def compilado(self, nombre):
+        return (self.fuentes / nombre / f"{nombre}.so").exists()
+
+    # ── interfaz ────────────────────────────────────────────────────────────
+    def cargar(self):
+        while (h := self.flujo.get_first_child()) is not None:
+            self.flujo.remove(h)
+        cargados = self.cargados()
+        for nombre, (titulo, descripcion) in COMPLEMENTOS.items():
+            self.flujo.append(self.tarjeta(nombre, titulo, descripcion, nombre in cargados))
+        n = len(COMPLEMENTOS)
+        activos = len([x for x in COMPLEMENTOS if x in cargados])
+        self.estado.set_text(f"{n} complementos · {activos} activos ahora mismo")
+
+    def tarjeta(self, nombre, titulo, descripcion, activo):
+        caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        caja.add_css_class("store-card")
+
+        fila = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        etiqueta = Gtk.Label(label=titulo)
+        etiqueta.set_xalign(0)
+        etiqueta.set_hexpand(True)
+        etiqueta.set_ellipsize(3)
+        etiqueta.add_css_class("store-title")
+        fila.append(etiqueta)
+
+        estado = Gtk.Label(label="Activo" if activo else "Inactivo")
+        estado.add_css_class("store-badge")
+        if activo:
+            estado.add_css_class("store-badge-ok")
+        fila.append(estado)
+        caja.append(fila)
+
+        paquete = Gtk.Label(label=nombre)
+        paquete.set_xalign(0)
+        paquete.add_css_class("store-desc")
+        caja.append(paquete)
+
+        desc = Gtk.Label(label=descripcion)
+        desc.set_wrap(True)
+        desc.set_lines(3)
+        desc.set_ellipsize(3)
+        desc.set_xalign(0)
+        desc.add_css_class("store-desc")
+        caja.append(desc)
+
+        acciones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        if activo:
+            boton = Gtk.Button(label="Desactivar")
+            boton.add_css_class("flat")
+            boton.set_tooltip_text("Descarga el complemento de esta sesión")
+            boton.connect("clicked", lambda *_, n=nombre: self.accion("descargar", n))
+        else:
+            boton = Gtk.Button(label="Activar")
+            boton.add_css_class("store-instalar")
+            boton.add_css_class("suggested-action")
+            boton.set_tooltip_text("Carga el complemento en Hyprland ahora")
+            boton.connect("clicked", lambda *_, n=nombre: self.accion("cargar", n))
+        acciones.append(boton)
+
+        compilar = Gtk.Button(label="Recompilar")
+        compilar.add_css_class("flat")
+        compilar.set_tooltip_text("Recompila el complemento con make")
+        compilar.connect("clicked", lambda *_, n=nombre: self.accion("compilar", n))
+        acciones.append(compilar)
+        caja.append(acciones)
+        return caja
+
+    # ── acciones ────────────────────────────────────────────────────────────
+    def accion(self, que, nombre):
+        self.estado.set_text(f"{que.capitalize()} {nombre}…")
+
+        def trabajo():
+            carpeta = self.fuentes / nombre
+            so = carpeta / f"{nombre}.so"
+            mensaje = ""
+            try:
+                if que == "cargar":
+                    r = subprocess.run(["hyprctl", "plugin", "load", str(so)],
+                                       capture_output=True, text=True, timeout=30)
+                    mensaje = r.stdout.strip() or "cargado"
+                elif que == "descargar":
+                    r = subprocess.run(["hyprctl", "plugin", "unload", str(so)],
+                                       capture_output=True, text=True, timeout=30)
+                    mensaje = r.stdout.strip() or "descargado"
+                elif que == "compilar":
+                    r = subprocess.run(["make"], cwd=str(carpeta),
+                                       capture_output=True, text=True, timeout=600)
+                    mensaje = "recompilado" if r.returncode == 0 else "falló la compilación"
+            except Exception as exc:  # noqa: BLE001
+                mensaje = f"error: {exc}"
+            GLib.idle_add(self.fin_accion, mensaje)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def fin_accion(self, mensaje):
+        self.estado.set_text(mensaje)
+        self.cargar()
+        return False
+
+    def on_actualizar(self, *_):
+        self.estado.set_text("Actualizando fuentes de los complementos…")
+
+        def trabajo():
+            try:
+                r = subprocess.run(["git", "pull", "--ff-only"], cwd=str(self.fuentes),
+                                   capture_output=True, text=True, timeout=180)
+                mensaje = "fuentes actualizadas" if r.returncode == 0 else "no se pudo actualizar"
+            except Exception:
+                mensaje = "no se pudo actualizar"
+            GLib.idle_add(self.fin_accion, mensaje)
+
+        threading.Thread(target=trabajo, daemon=True).start()
 
 
 # ────────────────────────────── descarga ────────────────────────────────────
