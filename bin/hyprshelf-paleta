@@ -1,0 +1,444 @@
+#!/usr/bin/env bash
+# hyprshelf-paleta — motor de temas de color para este escritorio.
+#
+# Un "tema" de los de verdad (Catppuccin, Dracula, Nord, Tokyo Night…) es una
+# PALETA: colores de fondo, texto, acento, bordes… y con ella se visten las
+# ventanas, la barra, la terminal…  Este script aplica esa paleta a lo que
+# manda en este equipo:
+#
+#   · Hyprland: bordes (activo/inactivo), grosor, esquinas redondeadas, huecos
+#     y desenfoque.
+#   · Barra de título (hyprbars): color de la barra y del texto.
+#   · kitty: fondo, texto, cursor, selección y los 16 colores ANSI.
+#
+# Uso:
+#   paleta listar                 lista los temas descargados
+#   paleta descargar [repo…]       descarga/actualiza temas de esos repos
+#   paleta previa <id>            genera la imagen de vista previa
+#   paleta aplicar <id>           aplica la paleta al escritorio
+#   paleta fondo <id>             pone el fondo de pantalla del tema
+#   paleta actual                 dice qué paleta está puesta
+#
+# Los temas se guardan en ~/.local/share/temas-paletas/<id>/
+set -uo pipefail
+
+RAIZ="${XDG_DATA_HOME:-$HOME/.local/share}/temas-paletas"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/temas-paletas"
+KITTY_CONF="$HOME/.config/kitty/kitty.conf"
+KITTY_TEMA="$HOME/.config/kitty/tema-actual.conf"
+ACTUAL="$CACHE/actual"
+REPOS_POR_DEFECTO="victorsosaMx/hyperland"
+
+log()  { printf '%s\n' "$*" >&2; }
+mk()   { mkdir -p "$1"; }
+
+# ─────────────────────────── descarga ───────────────────────────────────────
+descargar_repo() {
+    local repo="$1" base tree tmp id url
+    base="https://raw.githubusercontent.com/$repo/main"
+    tmp="$(mktemp -d)"
+    if ! curl -sS -m 60 -o "$tmp/tree.json" \
+        "https://api.github.com/repos/$repo/git/trees/main?recursive=1"; then
+        log "no pude leer el árbol de $repo"
+        rm -rf "$tmp"; return 1
+    fi
+
+    # rutas .../<algo>/themes/<id>/(colors.json|theme.json)
+    jq -r '.tree[]?.path' "$tmp/tree.json" 2>/dev/null \
+        | grep -E '/(themes|paletas)/[^/]+/(colors|theme)\.json$' > "$tmp/rutas" || true
+
+    local total hechos=0
+    total=$(wc -l < "$tmp/rutas")
+    if [ "$total" -eq 0 ]; then
+        log "el repo $repo no tiene temas en formato colors.json/theme.json"
+        rm -rf "$tmp"; return 1
+    fi
+
+    mk "$RAIZ"
+    while read -r ruta; do
+        id="$(printf '%s' "$ruta" | awk -F/ '{print $(NF-1)}')"
+        archivo="$(basename "$ruta")"
+        mk "$RAIZ/$id"
+        url="$base/$ruta"
+        if curl -sS -m 30 -o "$RAIZ/$id/$archivo" "$url"; then
+            printf '%s\n' "$repo" > "$RAIZ/$id/repo.txt"
+            hechos=$((hechos + 1))
+        fi
+    done < "$tmp/rutas"
+
+    rm -rf "$tmp"
+    printf 'descargados %s archivos de %s temas desde %s\n' "$hechos" \
+        "$(find "$RAIZ" -maxdepth 1 -mindepth 1 -type d | wc -l)" "$repo"
+}
+
+# ─────────────────────────── utilidades ─────────────────────────────────────
+ruta_theme() { printf '%s/%s' "$RAIZ" "$1"; }
+
+listar() {
+    local d
+    for d in "$RAIZ"/*/; do
+        [ -f "$d/colors.json" ] || continue
+        local id nombre
+        id="$(basename "$d")"
+        nombre="$(jq -r '.name // empty' "$d/theme.json" 2>/dev/null)"
+        [ -n "$nombre" ] || nombre="$id"
+        printf '%s\t%s\n' "$id" "$nombre"
+    done
+}
+
+actual() {
+    [ -f "$ACTUAL" ] && cat "$ACTUAL" || echo ""
+}
+
+# imagemagick: "-" para magick 7, "convert" para el 6
+MAGICK="$(command -v magick || command -v convert || true)"
+
+# ─────────────────────────── vista previa ───────────────────────────────────
+# Dibuja un escritorio en miniatura: fondo, ventana con barra de título y
+# tres botones, líneas de texto y una franja de barra. Todo con los colores
+# del tema, así se ve de un vistazo cómo queda.
+previa() {
+    local id="$1" d bg fg accent surface surface2 borde red
+    d="$(ruta_theme "$id")"
+    [ -f "$d/colors.json" ] || { log "no existe el tema $id"; return 1; }
+
+    bg=$(jq -r '.bg' "$d/colors.json")
+    fg=$(jq -r '.fg' "$d/colors.json")
+    accent=$(jq -r '.accent' "$d/colors.json")
+    surface=$(jq -r '.surface // .bg_alt // .bg' "$d/colors.json")
+    surface2=$(jq -r '.surface2 // .surface // .bg_alt' "$d/colors.json")
+    borde=$(jq -r '.border_active // .accent' "$d/colors.json")
+
+    mk "$CACHE"
+    local salida="$CACHE/previa-$id.png"
+    [ -n "$MAGICK" ] || { log "falta imagemagick"; return 1; }
+
+    "$MAGICK" -size 480x270 "xc:$bg" \
+        -fill "$surface2" -draw "roundrectangle 20,200 460,236 10,10" \
+        -fill "$surface"   -draw "roundrectangle 60,40 420,210 14,14" \
+        -fill "$borde"     -draw "roundrectangle 60,40 420,40 0,0" \
+        -fill "$borde"     -draw "rectangle 60,40 420,44" \
+        -fill "$accent"    -draw "circle 380,26 384,26" \
+        -fill "$fg"        -draw "circle 350,26 354,26" \
+        -fill "$surface2"  -draw "circle 320,26 324,26" \
+        -fill "$fg"        -draw "rectangle 90,80 300,84" \
+        -fill "$fg"        -draw "rectangle 90,100 260,104" \
+        -fill "$accent"    -draw "rectangle 90,120 200,124" \
+        -fill "$fg"        -draw "rectangle 90,140 280,144" \
+        -fill "$surface2"  -draw "rectangle 90,160 240,164" \
+        -fill "$accent"    -draw "roundrectangle 300,150 380,178 8,8" \
+        -fill "$fg"        -draw "rectangle 40,210 70,214" \
+        -fill "$fg"        -draw "rectangle 200,210 240,214" \
+        -fill "$surface2"  -draw "rectangle 400,210 440,214" \
+        "$salida" 2>/dev/null || true
+
+    [ -f "$salida" ] && printf '%s\n' "$salida"
+}
+
+# ─────────────────────────── aplicar ────────────────────────────────────────
+aplicar() {
+    local id="$1" con_fondo="${2:-}" d
+    d="$(ruta_theme "$id")"
+    [ -f "$d/colors.json" ] || { log "no existe el tema $id"; return 1; }
+
+    guardar_estado
+
+    local bg fg dim accent surface2 bact bina
+    local red orange yellow green teal blue sky mauve pink lavender overlay
+    bg=$(jq -r '.bg' "$d/colors.json")
+    fg=$(jq -r '.fg' "$d/colors.json")
+    dim=$(jq -r '.fg_dim // .fg' "$d/colors.json")
+    accent=$(jq -r '.accent' "$d/colors.json")
+    surface2=$(jq -r '.surface2 // .surface // .bg' "$d/colors.json")
+    bact=$(jq -r '.border_active // .accent' "$d/colors.json")
+    bina=$(jq -r '.border_inactive // .surface // .bg' "$d/colors.json")
+    red=$(jq -r '.red // .accent' "$d/colors.json")
+    orange=$(jq -r '.orange // .yellow // .accent' "$d/colors.json")
+    yellow=$(jq -r '.yellow // .orange // .accent' "$d/colors.json")
+    green=$(jq -r '.green // .accent' "$d/colors.json")
+    teal=$(jq -r '.teal // .blue // .accent' "$d/colors.json")
+    blue=$(jq -r '.blue // .accent' "$d/colors.json")
+    sky=$(jq -r '.sky // .blue // .accent' "$d/colors.json")
+    mauve=$(jq -r '.mauve // .accent' "$d/colors.json")
+    pink=$(jq -r '.pink // .accent' "$d/colors.json")
+    lavender=$(jq -r '.lavender // .accent' "$d/colors.json")
+    overlay=$(jq -r '.overlay // .fg_dim // .fg' "$d/colors.json")
+
+    local redondeo borde huecos blur
+    redondeo=$(jq -r '.hypr.rounding // 10' "$d/theme.json" 2>/dev/null || echo 10)
+    borde=$(jq -r '.hypr.border_size // 2' "$d/theme.json" 2>/dev/null || echo 2)
+    huecos=$(jq -r '.hypr.gaps_out // 5' "$d/theme.json" 2>/dev/null || echo 5)
+    blur=$(jq -r 'if .hypr.blur.enabled == false then 0 else 1 end' "$d/theme.json" 2>/dev/null || echo 1)
+
+    # ── fondo del tema, si se pidió ──────────────────────────────────────────
+    # ── fondo del tema (opcional) ───────────────────────────────────────────
+    # Al cambiarlo, DMS regenera su paleta Material a partir de la imagen, así
+    # que la barra, el dock y los menús también se tiñen del tema.
+    if [ "$con_fondo" = "--fondo" ] || [ "$con_fondo" = "fondo" ]; then
+        local img
+        if img="$(fondo "$id")" && [ -f "$img" ]; then
+            local m
+            for m in $(hyprctl monitors -j 2>/dev/null | jq -r '.[].name'); do
+                dms ipc call wallpaper setFor "$m" "$img" >/dev/null 2>&1 || true
+            done
+            if command -v awww >/dev/null 2>&1; then
+                pgrep -x awww-daemon >/dev/null 2>&1 || {
+                    setsid awww-daemon --format xrgb >/dev/null 2>&1 < /dev/null &
+                    sleep 2
+                }
+                awww img "$img" --transition-type any --transition-duration 1 >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+
+    # DMS/matugen tarda un par de segundos en regenerar su paleta desde el
+    # fondo nuevo y vuelve a pintar él los bordes: se le deja terminar antes
+    # de aplicar los colores del tema.
+    [ -n "${img:-}" ] && sleep 3
+
+    # ── Hyprland (en caliente, sin recargar la config) ──────────────────────
+    hyprctl eval "hl.config({
+        general = {
+            gaps_out = $huecos,
+            border_size = $borde,
+            [\"col.active_border\"] = \"rgba(${bact#\#}ff)\",
+            [\"col.inactive_border\"] = \"rgba(${bina#\#}ff)\",
+        },
+        decoration = {
+            rounding = $redondeo,
+            blur = { enabled = ($blur == 1) },
+        },
+    })" >/dev/null 2>&1
+
+    # ── Barra de título de hyprbars ─────────────────────────────────────────
+    hyprctl eval "hl.config({ plugin = { hyprbars = {
+        bar_color = \"rgba(${surface2#\#}f2)\",
+        [\"col.text\"] = \"rgba(${fg#\#}ff)\",
+    } } })" >/dev/null 2>&1
+
+    # ── kitty ───────────────────────────────────────────────────────────────
+    mk "$(dirname "$KITTY_TEMA")"
+    cat > "$KITTY_TEMA" <<KITTY
+# Generado por "paleta aplicar $id" — no editar a mano
+background            $bg
+foreground            $fg
+cursor                $accent
+cursor_text_color     $bg
+selection_background  $surface2
+selection_foreground  $fg
+url_color             $blue
+
+active_border_color   $bact
+inactive_border_color $bina
+
+color0   $surface2
+color8   $overlay
+color1   $red
+color9   $red
+color2   $green
+color10  $green
+color3   $yellow
+color11  $yellow
+color4   $blue
+color12  $blue
+color5   $mauve
+color13  $mauve
+color6   $teal
+color14  $teal
+color7   $fg
+color15  ${dim#\#}
+KITTY
+
+    if [ -f "$KITTY_CONF" ] && ! grep -qE '^\s*include\s+tema-actual\.conf' "$KITTY_CONF"; then
+        printf '\n# Tema de color activo (lo cambia el selector de temas)\ninclude tema-actual.conf\n' >> "$KITTY_CONF"
+    fi
+    # aplicar a las terminales abiertas, si kitty tiene control remoto
+    kitty @ set-colors --all --configured "$KITTY_TEMA" >/dev/null 2>&1 || true
+
+    mk "$CACHE"
+    printf '%s\n' "$id" > "$ACTUAL"
+
+    printf '%s\n' "$id"
+}
+
+# ─────────────────────────── fondo del tema ─────────────────────────────────
+fondo() {
+    local id="$1" d repo fondo_rel url destino
+    d="$(ruta_theme "$id")"
+    repo="$(cat "$d/repo.txt" 2>/dev/null || echo "$REPOS_POR_DEFECTO")"
+    fondo_rel="$(jq -r '.default_wallpaper // empty' "$d/theme.json" 2>/dev/null)"
+    [ -n "$fondo_rel" ] || { log "el tema $id no define fondo"; return 1; }
+
+    # el default_wallpaper es relativo a la carpeta del tema
+    local carpeta
+    carpeta="dotfiles/theme-switcher/themes/$id"
+    url="https://raw.githubusercontent.com/$repo/main/$carpeta/$fondo_rel"
+    destino="$HOME/Imágenes/Wallpapers/Temas/$id/$(basename "$fondo_rel")"
+    mk "$(dirname "$destino")"
+
+    if [ ! -f "$destino" ]; then
+        curl -sS -m 120 -o "$destino" "$url" || { log "no pude bajar el fondo"; return 1; }
+    fi
+    printf '%s\n' "$destino"
+}
+
+
+# ─────────────────────────── guardar / restaurar ────────────────────────────
+# Antes de aplicar nada se guardan los valores actuales (bordes, esquinas,
+# huecos, desenfoque y colores de la barra) para poder deshacer exactamente.
+#
+# No se usa "hyprctl reload" para restaurar: recarga TODA la config y en 0.57
+# deja hyprbars sin barras y mueve ventanas. Aquí se reaplican solo esos
+# valores con hyprctl eval.
+OPCIONES=(
+    general:col.active_border
+    general:col.inactive_border
+    general:border_size
+    general:gaps_out
+    decoration:rounding
+    decoration:blur:enabled
+    plugin:hyprbars:bar_color
+    plugin:hyprbars:col.text
+)
+
+guardar_estado() {
+    mk "$CACHE"
+    local op
+    : > "$CACHE/antes.jsonl"
+    for op in "${OPCIONES[@]}"; do
+        hyprctl -j getoption "$op" 2>/dev/null | jq -c . >> "$CACHE/antes.jsonl" || true
+    done
+}
+
+restaurar() {
+    if [ ! -s "$CACHE/antes.jsonl" ]; then
+        log "no tengo valores guardados; nada que restaurar"
+    else
+        python3 - "$CACHE/antes.jsonl" <<'PYEOF'
+import json, subprocess, sys
+
+NL = chr(10)
+valores = {}
+for linea in open(sys.argv[1], encoding="utf-8"):
+    linea = linea.strip()
+    if not linea:
+        continue
+    d = json.loads(linea)
+    valores[d["option"]] = d
+
+
+def argb_a_rgba(token):
+    """Hyprland guarda los colores como AARRGGBB; rgba() espera RRGGBBAA."""
+    token = token.lstrip("#")
+    if len(token) == 8:
+        aa, rrggbb = token[:2], token[2:]
+    elif len(token) == 6:
+        aa, rrggbb = "ff", token
+    else:
+        return None
+    return '"rgba(' + rrggbb + aa + ')"'
+
+
+def color_a_rgba(d):
+    if "gradient" in d:
+        token = d["gradient"].split()[0]
+        return argb_a_rgba(token)
+    if "color" in d:
+        c = d["color"]
+        if isinstance(c, dict):
+            return '"rgba(%02x%02x%02xff)"' % (c.get("r", 0), c.get("g", 0), c.get("b", 0))
+        if isinstance(c, int):
+            return argb_a_rgba("%08x" % (c & 0xFFFFFFFF))
+    if "int" in d:
+        return argb_a_rgba("%08x" % (d["int"] & 0xFFFFFFFF))
+    return None
+
+
+def lua_valor(op):
+    d = valores.get(op)
+    if not d:
+        return None
+    es_color = ("gradient" in d) or ("color" in d) or ("col." in op) or op.endswith("bar_color")
+    if es_color:
+        return color_a_rgba(d)
+    if "int" in d:
+        return str(d["int"])
+    if "bool" in d:
+        return "true" if d["bool"] else "false"
+    if "css" in d:
+        partes = d["css"].split()
+        if partes and len(set(partes)) == 1:
+            return partes[0]
+        return '"' + d["css"] + '"'
+    if "str" in d:
+        return '"' + d["str"] + '"'
+    return None
+
+
+def tabla(nombre, items):
+    if not items:
+        return ""
+    cuerpo = ", ".join(k + " = " + v for k, v in items.items())
+    return nombre + " = { " + cuerpo + " }," + NL
+
+
+g = {}
+for op, clave in (
+    ("general:col.active_border", '["col.active_border"]'),
+    ("general:col.inactive_border", '["col.inactive_border"]'),
+    ("general:border_size", "border_size"),
+    ("general:gaps_out", "gaps_out"),
+):
+    v = lua_valor(op)
+    if v:
+        g[clave] = v
+
+dec = {}
+v = lua_valor("decoration:rounding")
+if v:
+    dec["rounding"] = v
+d = valores.get("decoration:blur:enabled")
+if d:
+    activo = d.get("int", d.get("bool", 0))
+    dec["blur"] = "{ enabled = " + ("true" if activo else "false") + " }"
+
+hb = {}
+for op, clave in (
+    ("plugin:hyprbars:bar_color", "bar_color"),
+    ("plugin:hyprbars:col.text", '["col.text"]'),
+):
+    v = lua_valor(op)
+    if v:
+        hb[clave] = v
+
+codigo = "hl.config({" + NL + tabla("general", g) + tabla("decoration", dec) + "})" + NL
+if hb:
+    codigo += "hl.config({ plugin = { hyprbars = { " + ", ".join(k + " = " + v for k, v in hb.items()) + " } } })" + NL
+
+subprocess.run(["hyprctl", "eval", codigo], capture_output=True)
+print("valores restaurados")
+PYEOF
+    fi
+
+    if [ -f "$KITTY_CONF" ]; then
+        grep -vE '^\s*include\s+tema-actual\.conf' "$KITTY_CONF" \
+            | grep -v '^# Tema de color activo (lo cambia el selector de temas)$' \
+            > "$KITTY_CONF.tmp" && mv "$KITTY_CONF.tmp" "$KITTY_CONF"
+    fi
+    rm -f "$KITTY_TEMA"
+    kitty @ set-colors --all --reset >/dev/null 2>&1 || true
+    rm -f "$ACTUAL"
+    printf 'tema del sistema restaurado\n'
+}
+
+case "${1:-}" in
+    listar)    listar ;;
+    actual)    actual ;;
+    descargar) shift; [ $# -gt 0 ] || set -- $REPOS_POR_DEFECTO
+               for r in "$@"; do descargar_repo "$r"; done ;;
+    previa)    [ -n "${2:-}" ] && previa "$2" || { log "uso: paleta previa <id>"; exit 1; } ;;
+    aplicar)   [ -n "${2:-}" ] && aplicar "$2" "${3:-}" || { log "uso: paleta aplicar <id> [--fondo]"; exit 1; } ;;
+    fondo)     [ -n "${2:-}" ] && fondo "$2" || { log "uso: paleta fondo <id>"; exit 1; } ;;
+    restaurar) restaurar ;;
+    *) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

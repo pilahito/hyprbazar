@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+# hyprshelf-tienda — buscador e instalador de temas de la comunidad.
+#
+# Busca en GitHub repositorios de temas/dotfiles para Hyprland, traduce su
+# descripción al español y, al instalar, se queda solo con lo aprovechable:
+#
+#   · paletas de color (colors.json / theme.json) -> entran en el selector de
+#     "Temas de color"
+#   · fondos de pantalla (imágenes)               -> ~/Imágenes/Wallpapers/Comunidad
+#
+# Nada de esto toca tu configuración: no se copian binds, ni waybar, ni nada
+# que pueda romper el escritorio. Solo se añaden temas y fondos que luego
+# aplicas tú desde el selector.
+#
+# Uso:
+#   tienda buscar "hyprland themes"     busca repos y traduce la descripción
+#   tienda instalar owner/repo          descarga un repo y extrae temas/fondos
+#   tienda instalados                   lista lo que ya has instalado
+set -uo pipefail
+
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/tienda"
+DATOS="${XDG_DATA_HOME:-$HOME/.local/share}/tienda"
+PALETAS="${XDG_DATA_HOME:-$HOME/.local/share}/temas-paletas"
+FONDOS="$HOME/Imágenes/Wallpapers/Comunidad"
+TRAD="$CACHE/traducciones.json"
+TOKEN_FILE="$HOME/.config/tienda/token"
+
+log() { printf '%s\n' "$*" >&2; }
+mk()  { mkdir -p "$1"; }
+mk "$CACHE"; mk "$DATOS"
+
+API="https://api.github.com"
+AUTH=()
+[ -f "$TOKEN_FILE" ] && AUTH=(-H "Authorization: Bearer $(cat "$TOKEN_FILE")")
+
+gh() { curl -sS -m 30 "${AUTH[@]}" -H "Accept: application/vnd.github+json" "$@"; }
+
+# ───────────────────────── traducción (con caché) ───────────────────────────
+traducir() {
+    local texto="$1"
+    [ -n "$texto" ] || return 0
+    if [ -f "$TRAD" ]; then
+        local guardado
+        guardado="$(jq -r --arg t "$texto" '.[$t] // empty' "$TRAD" 2>/dev/null)"
+        [ -n "$guardado" ] && { printf '%s' "$guardado"; return 0; }
+    fi
+    local url salida
+    url="https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=es&dt=t&q=$(printf '%s' "$texto" | jq -sRr @uri)"
+    salida="$(curl -sS -m 15 "$url" 2>/dev/null | jq -r '[.[0][][0]] | join("")' 2>/dev/null)"
+    if [ -n "$salida" ] && [ "$salida" != "null" ]; then
+        local tmp
+        tmp="$(jq -c --arg t "$texto" --arg s "$salida" '. + {($t): $s}' "$TRAD" 2>/dev/null || echo "{}")"
+        printf '%s\n' "$tmp" > "$TRAD"
+        printf '%s' "$salida"
+    fi
+}
+
+# ───────────────────────── buscar ───────────────────────────────────────────
+buscar() {
+    local consulta="${1:-hyprland dotfiles}"
+    local q
+    q="$(printf '%s' "$consulta" | jq -sRr @uri)"
+    local json
+    json="$(gh "$API/search/repositories?q=$q&sort=stars&order=desc&per_page=20")"
+    if ! printf '%s' "$json" | jq -e '.items' >/dev/null 2>&1; then
+        log "GitHub no devolvió resultados (¿límite de peticiones?)"
+        printf '[]\n'
+        return 1
+    fi
+    # traducción de las descripciones (secuencial, con caché)
+    local i total
+    total="$(printf '%s' "$json" | jq '.items | length')"
+    i=0
+    while [ "$i" -lt "$total" ]; do
+        local desc
+        desc="$(printf '%s' "$json" | jq -r --argjson i "$i" '.items[$i].description // ""')"
+        if [ -n "$desc" ]; then
+            traducir "$desc" >/dev/null 2>&1
+        fi
+        i=$((i + 1))
+    done
+    printf '%s' "$json" | jq -c '
+      [ .items[] | {
+          repo: .full_name,
+          nombre: (.name),
+          estrellas: .stargazers_count,
+          descripcion: (.description // ""),
+          avatar: .owner.avatar_url,
+          url: .html_url,
+          actualizado: .pushed_at
+        } ]' | while read -r linea; do
+        printf '%s' "$linea" | jq -c --slurpfile t /dev/null '.[]' 2>/dev/null || true
+    done
+    return 0
+}
+
+# versión simple y fiable: una línea JSON por repo, con "descripcion_es" y banner
+buscar_simple() {
+    local consulta="${1:-hyprland dotfiles}"
+    python3 - "$consulta" "$TRAD" "$(cat "$TOKEN_FILE" 2>/dev/null || true)" <<'PYEOF'
+import json, re, sys, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+consulta, fichero_cache, token = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def pet(url, cabeceras=None):
+    req = urllib.request.Request(url, headers=cabeceras or {})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        return json.loads(r.read().decode())
+
+cache = {}
+try:
+    with open(fichero_cache, encoding="utf-8") as fh:
+        cache = json.load(fh)
+except Exception:
+    pass
+
+headers = {"Accept": "application/vnd.github+json", "User-Agent": "tienda-dsh"}
+if token:
+    headers["Authorization"] = "Bearer " + token
+
+q = urllib.parse.quote(consulta)
+datos = pet("https://api.github.com/search/repositories?q=" + q + "&sort=stars&order=desc&per_page=24", headers)
+items = datos.get("items", [])
+
+def traducir(texto):
+    if not texto:
+        return ""
+    if texto in cache:
+        return cache[texto]
+    url = ("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=es&dt=t&q="
+           + urllib.parse.quote(texto))
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            d = json.loads(r.read().decode())
+        salida = "".join(p[0] for p in (d[0] or []) if p and p[0])
+    except Exception:
+        salida = ""
+    if salida:
+        cache[texto] = salida
+    return salida
+
+def primera_imagen(repo):
+    """Primera captura del README (evita escudos de badges)."""
+    import re
+    try:
+        url = f"https://raw.githubusercontent.com/{repo}/HEAD/README.md"
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "tienda-dsh"}), timeout=15) as r:
+            texto = r.read().decode("utf-8", "replace")
+    except Exception:
+        return ""
+    candidatas = re.findall(r"!\[[^\]]*\]\(([^)\s]+)", texto) + re.findall(r"<img[^>]+src=[\"']([^\"']+)", texto)
+    for c in candidatas:
+        if any(x in c.lower() for x in ("shields.io", "badge", "badgen", "workflow", "travis", "codecov", "star-history")):
+            continue
+        if c.startswith("http"):
+            return c
+        if c.startswith("/"):
+            return "https://raw.githubusercontent.com" + c
+        return f"https://raw.githubusercontent.com/{repo}/HEAD/{c.lstrip('./')}"
+    return ""
+
+
+textos = [i.get("description") or "" for i in items]
+with ThreadPoolExecutor(max_workers=6) as ex:
+    imagenes = list(ex.map(primera_imagen, [i["full_name"] for i in items]))
+with ThreadPoolExecutor(max_workers=6) as ex:
+    traducciones = list(ex.map(traducir, textos))
+
+try:
+    with open(fichero_cache, "w", encoding="utf-8") as fh:
+        json.dump(cache, fh, ensure_ascii=False)
+except Exception:
+    pass
+
+for item, es, img in zip(items, traducciones, imagenes):
+    print(json.dumps({
+        "repo": item["full_name"],
+        "nombre": item["name"],
+        "estrellas": item["stargazers_count"],
+        "descripcion": item.get("description") or "",
+        "descripcion_es": es,
+        "avatar": item["owner"]["avatar_url"],
+        "url": item["html_url"],
+        "banner": img,
+        "imagen": img,
+        "temas": item.get("topics") or [],
+        "lenguaje": item.get("language") or "",
+        "actualizado": (item.get("pushed_at") or "")[:10],
+    }, ensure_ascii=False))
+PYEOF
+}
+
+# ───────────────────────── instalar ─────────────────────────────────────────
+instalar() {
+    local repo="$1" slug destino
+    slug="$(printf '%s' "$repo" | tr '/' '-')"
+    destino="$DATOS/$slug"
+    mk "$DATOS"
+
+    if [ -d "$destino/.git" ]; then
+        log "actualizando $repo…"
+        git -C "$destino" fetch --depth 1 origin >/dev/null 2>&1 && \
+        git -C "$destino" reset --hard FETCH_HEAD >/dev/null 2>&1
+    else
+        log "descargando $repo…"
+        rm -rf "$destino"
+        git clone --depth 1 --filter=blob:none --sparse \
+            "https://github.com/$repo.git" "$destino" >/dev/null 2>&1 || {
+            log "no pude descargar $repo"; return 1; }
+        # solo lo que sirve: paletas, fondos y capturas
+        local patrones=(
+            '**/colors.json' '**/theme.json'
+            '**/wallpapers/**' '**/Wallpapers/**' '**/wallpaper/**' '**/Wallpaper/**'
+            '**/backgrounds/**' '**/Backgrounds/**' '**/walls/**' '**/Walls/**'
+            'Screenshots/**' 'screenshots/**' '**/Screenshots/**'
+        )
+        if [ "${SOLO_PALETAS:-0}" = "1" ]; then
+            patrones=('**/colors.json' '**/theme.json')
+        fi
+        git -C "$destino" sparse-checkout set --no-cone "${patrones[@]}" >/dev/null 2>&1 || true
+    fi
+
+    local paletas=0 fondos=0
+    # ── paletas ──
+    while IFS= read -r colors; do
+        [ -n "$colors" ] || continue
+        local dir id
+        dir="$(dirname "$colors")"
+        id="$(basename "$dir")"
+        # si ya tenemos ese tema (descargado con "paleta descargar"), no duplicar
+        [ -d "$PALETAS/$id" ] && continue
+        # nombre único: repo + tema
+        local destino_pal="$PALETAS/${slug}--${id}"
+        mk "$destino_pal"
+        cp -f "$colors" "$destino_pal/colors.json" 2>/dev/null || continue
+        [ -f "$dir/theme.json" ] && cp -f "$dir/theme.json" "$destino_pal/theme.json" 2>/dev/null
+        printf '%s\n' "$repo" > "$destino_pal/repo.txt"
+        paletas=$((paletas + 1))
+    done < <(find "$destino" -name colors.json -not -path "*/.git/*" 2>/dev/null)
+
+    # ── fondos ──
+    local carpeta="$FONDOS/$slug"
+    mk "$carpeta"
+    while IFS= read -r img; do
+        [ -n "$img" ] || continue
+        cp -f "$img" "$carpeta/" 2>/dev/null && fondos=$((fondos + 1))
+    done < <(find "$destino" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) \
+             -not -path "*/.git/*" -not -path "*/Screenshots/*" -not -path "*/screenshots/*" 2>/dev/null)
+
+    # ── plan B: si no apareció nada, bajar el repo entero (si no es enorme) ──
+    if [ "$paletas" -eq 0 ] && [ "$fondos" -eq 0 ] && [ "${SOLO_PALETAS:-0}" != "1" ]; then
+        local tam
+        tam="$(gh "$API/repos/$repo" | jq -r '.size // 0')"
+        if [ "${tam:-0}" -lt 80000 ]; then
+            log "estructura distinta; descargando el repo completo…"
+            git -C "$destino" sparse-checkout disable >/dev/null 2>&1 || true
+            while IFS= read -r colors; do
+                [ -n "$colors" ] || continue
+                local id2 dest2
+                id2="$(basename "$(dirname "$colors")")"
+                dest2="$PALETAS/${slug}--${id2}"
+                mk "$dest2"
+                cp -f "$colors" "$dest2/colors.json" 2>/dev/null && {
+                    [ -f "$(dirname "$colors")/theme.json" ] && cp -f "$(dirname "$colors")/theme.json" "$dest2/theme.json" 2>/dev/null
+                    printf '%s\n' "$repo" > "$dest2/repo.txt"
+                    paletas=$((paletas + 1))
+                }
+            done < <(find "$destino" -name colors.json -not -path "*/.git/*" 2>/dev/null)
+            while IFS= read -r img; do
+                [ -n "$img" ] || continue
+                cp -f "$img" "$carpeta/" 2>/dev/null && fondos=$((fondos + 1))
+            done < <(find "$destino" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) -not -path "*/.git/*" -not -path "*/Screenshots/*" 2>/dev/null)
+        fi
+    fi
+
+    printf 'instalado %s: %s paletas, %s fondos\n' "$repo" "$paletas" "$fondos"
+}
+
+instalados() {
+    local d
+    for d in "$DATOS"/*/; do
+        [ -d "$d/.git" ] || continue
+        printf '%s\n' "$(basename "$d")"
+    done
+}
+
+case "${1:-}" in
+    buscar)    buscar_simple "${2:-hyprland dotfiles}" ;;
+    instalar)
+        shift
+        while [ $# -gt 0 ] && [ "${1#--}" != "$1" ]; do
+            [ "$1" = "--solo-paletas" ] && SOLO_PALETAS=1
+            shift
+        done
+        [ -n "${1:-}" ] && instalar "$1" || { log "uso: tienda instalar [--solo-paletas] owner/repo"; exit 1; } ;;
+    instalados) instalados ;;
+    *) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac
