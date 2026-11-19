@@ -452,10 +452,7 @@ class Ventana(Gtk.ApplicationWindow):
         if not ruta:
             return
         carpeta = str(Path(ruta).parent)
-        try:
-            Gtk.UriLauncher(uri="file://" + carpeta).launch(None, None, None)
-        except Exception:
-            pass
+        abrir_con_sistema(carpeta)
 
     def traducir_nombres(self):
         """Traduce al español los nombres de tema que vengan en otro idioma."""
@@ -967,7 +964,7 @@ class TiendaPage(Gtk.Box):
 
         ver = Gtk.Button(label="Ver en GitHub")
         ver.add_css_class("flat")
-        ver.connect("clicked", lambda *_, u=r.get("url", ""): Gtk.UriLauncher(uri=u).launch(None, None, None))
+        ver.connect("clicked", lambda *_, u=r.get("url", ""): abrir_con_sistema(u))
         acciones.append(ver)
         caja.append(acciones)
 
@@ -1168,6 +1165,31 @@ class VentanaDescarga(Gtk.Window):
         self.progreso_texto.set_text(f"Listo: {hechos} de {n} fondos añadidos.")
         self.padre.cargar()
         return False
+
+
+def abrir_con_sistema(destino):
+    """Abre una carpeta o una URL con el manejador del escritorio.
+
+    Gtk.UriLauncher.launch() es asíncrono y con callback None no hacía nada
+    (el botón "Carpeta" no abría nada), así que se lanza xdg-open, que es lo
+    que usa el sistema para abrir carpetas y enlaces.
+    """
+    # se prueban los gestores de archivos de uno en uno: xdg-open a veces
+    # arranca el proceso pero no llega a mostrar la ventana
+    for cmd in (["dolphin", destino],
+                ["nemo", destino],
+                ["thunar", destino],
+                ["nautilus", "--new-window", destino],
+                ["xdg-open", destino]):
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def contar_descargados():
