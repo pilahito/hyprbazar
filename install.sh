@@ -53,7 +53,7 @@ if [ -f "$AQUI/assets/hyprbazar.svg" ]; then
     echo "  icono -> $ICONOS"
 fi
 
-cat > "$APPS/hyprbazar.desktop" <<'DESK'
+cat > "$APPS/es.david.HyprBazar.desktop" <<'DESK'
 [Desktop Entry]
 Type=Application
 Version=1.0
@@ -64,9 +64,11 @@ Icon=hyprbazar
 Terminal=false
 Categories=Settings;DesktopSettings;
 Keywords=tema;temas;fondo;wallpaper;paleta;hyprland;
-StartupWMClass=hyprbazar
+StartupWMClass=es.david.HyprBazar
 DESK
 update-desktop-database "$APPS" >/dev/null 2>&1 || true
+# limpiar el nombre antiguo del lanzador, si quedó de una versión anterior
+rm -f "$APPS/hyprbazar.desktop" 2>/dev/null || true
 
 cat <<'FIN'
 
