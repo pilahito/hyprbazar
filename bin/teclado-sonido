@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+teclado-sonido — sonido de teclado al escribir, para Wayland/Hyprland.
+
+Lee directamente los teclados de /dev/input (hace falta estar en el grupo
+"input") y reproduce un sonido con cada pulsación. No necesita X11, ni sudo,
+ni ningún servicio aparte.
+
+Uso:
+    teclado-sonido                       # pack por defecto
+    teclado-sonido -s cherrymx-blue-pbt  # elegir pack
+    teclado-sonido -V 40                 # volumen (por defecto 60)
+    teclado-sonido -l                    # listar packs disponibles
+
+Los packs de sonido son los de MechSim (licencia del proyecto original) y se
+buscan en ~/.local/share/mechsim/audio/<pack>/. Se usa su fichero
+config.json: si el pack tiene un solo sonido (sound.ogg) se reproduce ese, y
+si tiene varios se elige uno al azar entre los de pulsación.
+"""
+import argparse
+import json
+import random
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+try:
+    import evdev
+    from evdev import ecodes
+except ImportError:
+    print("Falta python-evdev (paquete python-evdev).", file=sys.stderr)
+    sys.exit(1)
+
+PAQUETES = Path.home() / ".local" / "share" / "mechsim" / "audio"
+CONFIG = Path.home() / ".config" / "hyprbazar" / "sonido.json"
+
+
+def leer_config():
+    """Ajustes guardados desde HyprBazar (pack, volumen y si está activo)."""
+    try:
+        return json.loads(CONFIG.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def guardar_config(datos):
+    try:
+        CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG.write_text(json.dumps(datos, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+SEPARACION_MINIMA = 0.012  # segundos entre sonidos (evita ráfagas)
+
+
+def packs():
+    if not PAQUETES.is_dir():
+        return []
+    return sorted(p.name for p in PAQUETES.iterdir() if p.is_dir())
+
+
+def cargar_pack(nombre):
+    """Devuelve la lista de ficheros de sonido del pack."""
+    carpeta = PAQUETES / nombre
+    if not carpeta.is_dir():
+        raise SystemExit(f"No existe el pack '{nombre}'. Prueba: teclado-sonido -l")
+
+    sonidos = []
+    config = carpeta / "config.json"
+    if config.exists():
+        try:
+            datos = json.loads(config.read_text(encoding="utf-8"))
+            # single: un solo fichero; definidos: uno por tecla
+            if isinstance(datos.get("sound"), str):
+                sonidos.append(carpeta / datos["sound"])
+            for clave in ("defines", "packs", "generic"):
+                valor = datos.get(clave)
+                if isinstance(valor, dict):
+                    for v in valor.values():
+                        if isinstance(v, str):
+                            sonidos.append(carpeta / v)
+                        elif isinstance(v, list):
+                            sonidos += [carpeta / x for x in v if isinstance(x, str)]
+                elif isinstance(valor, list):
+                    sonidos += [carpeta / x for x in valor if isinstance(x, str)]
+        except Exception:
+            pass
+
+    if not sonidos:
+        sonidos = sorted(carpeta.glob("*.ogg")) + sorted(carpeta.glob("*.wav"))
+    sonidos = [s for s in sonidos if s.exists()]
+    if not sonidos:
+        raise SystemExit(f"El pack '{nombre}' no tiene sonidos utilizables.")
+    return sonidos
+
+
+def reproductor():
+    for cmd in ("pw-play", "paplay", "ffplay"):
+        if shutil.which(cmd):
+            return cmd
+    raise SystemExit("No encuentro pw-play, paplay ni ffplay para reproducir.")
+
+
+# Dispositivos que NO deben sonar: los crea software de automatización
+# (ydotool/uinput) y son los que usa el agente para mover el ratón y teclear.
+VIRTUALES = ("ydotool", "virtual", "uinput", "warp", "autopilot", "fake")
+VENDOR_YDOTOOL = 0x2333
+
+
+def es_virtual(aparato):
+    nombre = (aparato.name or "").lower()
+    if any(pista in nombre for pista in VIRTUALES):
+        return True
+    if aparato.info.vendor == VENDOR_YDOTOOL:
+        return True
+    return False
+
+
+def teclados():
+    aparatos = []
+    for ruta in evdev.list_devices():
+        try:
+            aparato = evdev.InputDevice(ruta)
+        except Exception:
+            continue
+        teclas = aparato.capabilities().get(ecodes.EV_KEY, [])
+        # solo teclados de verdad: tienen letras
+        if ecodes.KEY_A in teclas and ecodes.KEY_Z in teclas:
+            if es_virtual(aparato):
+                continue          # teclado simulado: no suena
+            aparatos.append(aparato)
+    return aparatos
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("-s", "--sound", default=None)
+    ap.add_argument("-V", "--volume", type=int, default=None)
+    ap.add_argument("-l", "--list", action="store_true")
+    args = ap.parse_args()
+
+    if args.list:
+        for p in packs():
+            print(" ", p)
+        return 0
+
+    # si no se indica nada por línea de órdenes, se usan los ajustes guardados
+    guardado = leer_config()
+    pack = args.sound or guardado.get("pack") or "cherrymx-blue-pbt"
+    if args.volume is not None:
+        volumen_pedido = args.volume
+    else:
+        volumen_pedido = guardado.get("volumen", 60)
+
+    sonidos = cargar_pack(pack)
+    programa = reproductor()
+    volumen = max(0, min(100, int(volumen_pedido)))
+
+    aparatos = teclados()
+    if not aparatos:
+        print(
+            "No encuentro ningún teclado en /dev/input.\n"
+            "Comprueba que estás en el grupo 'input' (groups | grep input).",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"teclado-sonido: {len(aparatos)} teclado(s), pack '{pack}', "
+          f"volumen {volumen}%", flush=True)
+
+    import selectors
+    import time
+
+    ultimo = 0.0
+    sel = selectors.DefaultSelector()
+    for aparato in aparatos:
+        sel.register(aparato, selectors.EVENT_READ)
+
+    try:
+        while True:
+            for clave, _ in sel.select(timeout=1.0):
+                aparato = clave.fileobj
+                try:
+                    for evento in aparato.read():
+                        if evento.type != ecodes.EV_KEY:
+                            continue
+                        if evento.value != 1:      # solo al pulsar
+                            continue
+                        ahora = time.monotonic()
+                        if ahora - ultimo < SEPARACION_MINIMA:
+                            continue
+                        ultimo = ahora
+                        archivo = random.choice(sonidos)
+                        orden = [programa, "--volume", str(volumen), str(archivo)]
+                        if programa == "ffplay":
+                            orden = [programa, "-nodisp", "-autoexit", "-loglevel",
+                                     "quiet", "-volume", str(volumen), str(archivo)]
+                        subprocess.Popen(orden, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL,
+                                         start_new_session=True)
+                except OSError:
+                    # dispositivo desconectado: se quita de la lista
+                    try:
+                        sel.unregister(aparato)
+                    except Exception:
+                        pass
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for aparato in aparatos:
+            try:
+                aparato.close()
+            except Exception:
+                pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

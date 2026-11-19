@@ -295,6 +295,9 @@ class Ventana(Gtk.ApplicationWindow):
 
         self.pagina_complementos = ComplementosPage(self)
         self.pila.add_titled(self.pagina_complementos, "complementos", "Complementos")
+
+        self.pagina_sonido = SonidoPage(self)
+        self.pila.add_titled(self.pagina_sonido, "sonido", "Sonido")
         self.pila.connect("notify::visible-child", self.on_cambio_pagina)
 
         self.set_child(self.pila)
@@ -304,6 +307,8 @@ class Ventana(Gtk.ApplicationWindow):
             if os.environ.get("TEMAS_PALETAS") == "1":
                 self.pila.set_visible_child_name("paletas")
                 self.pagina_paletas.generar_previas()
+            if os.environ.get("TEMAS_SONIDO") == "1":
+                self.pila.set_visible_child_name("sonido")
             if os.environ.get("TEMAS_COMPLEMENTOS") == "1":
                 self.pila.set_visible_child_name("complementos")
             if os.environ.get("TEMAS_TIENDA") == "1":
@@ -774,6 +779,236 @@ class PaletasPage(Gtk.Box):
         self.cargar()
 
 
+
+
+
+# ────────────────────────────── sonido ──────────────────────────────────────
+CONFIG_SONIDO = Path.home() / ".config" / "hyprbazar" / "sonido.json"
+AUDIO_PACKS = Path.home() / ".local" / "share" / "mechsim" / "audio"
+JUGADOR = Path.home() / ".local" / "bin" / "teclado-sonido"
+
+
+def leer_sonido():
+    try:
+        return json.loads(CONFIG_SONIDO.read_text(encoding="utf-8"))
+    except Exception:
+        return {"activo": False, "pack": "cherrymx-blue-pbt", "volumen": 60}
+
+
+def guardar_sonido(datos):
+    try:
+        CONFIG_SONIDO.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_SONIDO.write_text(json.dumps(datos, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def packs_sonido():
+    if not AUDIO_PACKS.is_dir():
+        return []
+    return sorted(p.name for p in AUDIO_PACKS.iterdir() if p.is_dir())
+
+
+def parar_sonido():
+    """Mata las instancias del reproductor (sin matarse a sí mismo)."""
+    import os
+    yo = os.getpid()
+    for entrada in Path("/proc").iterdir():
+        if not entrada.name.isdigit():
+            continue
+        pid = int(entrada.name)
+        if pid == yo:
+            continue
+        try:
+            cmd = (entrada / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        except Exception:
+            continue
+        if "teclado-sonido" in cmd and "hyprbazar" not in cmd:
+            try:
+                os.kill(pid, 15)
+            except Exception:
+                pass
+
+
+def arrancar_sonido():
+    if not JUGADOR.exists():
+        return False
+    try:
+        subprocess.Popen([str(JUGADOR)], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except Exception:
+        return False
+
+
+def sonido_activo():
+    for entrada in Path("/proc").iterdir():
+        if not entrada.name.isdigit():
+            continue
+        try:
+            cmd = (entrada / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        except Exception:
+            continue
+        if "teclado-sonido" in cmd and "hyprbazar" not in cmd:
+            return True
+    return False
+
+
+class SonidoPage(Gtk.Box):
+    """Sonido de teclado al escribir: pack, volumen y encendido."""
+
+    def __init__(self, ventana):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.ventana = ventana
+        self.ajustes = leer_sonido()
+        self._listo = False
+
+        barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        barra.add_css_class("page-toolbar")
+
+        self.interruptor = Gtk.Switch()
+        self.interruptor.set_active(bool(self.ajustes.get("activo")))
+        self.interruptor.set_valign(Gtk.Align.CENTER)
+        self.interruptor.connect("notify::active", self.on_activar)
+        barra.append(self.interruptor)
+
+        etiqueta_sw = Gtk.Label(label="Sonido de teclado al escribir")
+        etiqueta_sw.set_xalign(0)
+        etiqueta_sw.add_css_class("store-title")
+        barra.append(etiqueta_sw)
+
+        relleno = Gtk.Box()
+        relleno.set_hexpand(True)
+        barra.append(relleno)
+
+        self.estado = Gtk.Label(label="")
+        self.estado.set_xalign(0)
+        self.estado.add_css_class("page-footer-text")
+        pie = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        pie.add_css_class("page-footer")
+        pie.append(self.estado)
+
+        # ── contenido ──
+        contenido = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        contenido.set_margin_top(14)
+        contenido.set_margin_start(16)
+        contenido.set_margin_end(16)
+
+        titulo_pack = Gtk.Label(label="Pack de sonido")
+        titulo_pack.set_xalign(0)
+        titulo_pack.add_css_class("heading")
+        contenido.append(titulo_pack)
+
+        packs = packs_sonido()
+        self.combo = Gtk.DropDown.new_from_strings(packs or ["(sin packs)"])
+        try:
+            self.combo.set_selected(packs.index(self.ajustes.get("pack", "")))
+        except ValueError:
+            self.combo.set_selected(0)
+        self.combo.connect("notify::selected", self.on_cambiar_pack)
+        contenido.append(self.combo)
+
+        titulo_vol = Gtk.Label(label="Volumen")
+        titulo_vol.set_xalign(0)
+        titulo_vol.add_css_class("heading")
+        contenido.append(titulo_vol)
+
+        fila_vol = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.escala = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 5)
+        self.escala.set_value(float(self.ajustes.get("volumen", 60)))
+        self.escala.set_hexpand(True)
+        self.escala.set_draw_value(True)
+        self.escala.set_value_pos(Gtk.PositionType.RIGHT)
+        self.escala.connect("value-changed", self.on_cambiar_volumen)
+        fila_vol.append(self.escala)
+        contenido.append(fila_vol)
+
+        probar = Gtk.Button(label="Probar el sonido")
+        probar.add_css_class("store-instalar")
+        probar.add_css_class("suggested-action")
+        probar.set_halign(Gtk.Align.START)
+        probar.connect("clicked", self.on_probar)
+        contenido.append(probar)
+
+        ayuda = Gtk.Label(
+            label="El sonido se reproduce leyendo los teclados de /dev/input; hace "
+                  "falta pertenecer al grupo «input». Arranca solo al iniciar sesión."
+        )
+        ayuda.set_wrap(True)
+        ayuda.set_xalign(0)
+        ayuda.add_css_class("store-desc")
+        contenido.append(ayuda)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_child(contenido)
+
+        self.append(barra)
+        self.append(scroll)
+        self.append(pie)
+        self._listo = True
+        self.actualizar_estado()
+
+    # ── helpers ─────────────────────────────────────────────────────────────
+    def pack_actual(self):
+        packs = packs_sonido()
+        i = self.combo.get_selected()
+        return packs[i] if 0 <= i < len(packs) else self.ajustes.get("pack", "")
+
+    def actualizar_estado(self):
+        activo = sonido_activo()
+        self.estado.set_text(
+            f"Pack: {self.pack_actual()} · volumen {int(self.escala.get_value())}% · "
+            + ("reproduciendo" if activo else "apagado")
+        )
+
+    def aplicar(self):
+        self.ajustes = {
+            "activo": self.interruptor.get_active(),
+            "pack": self.pack_actual(),
+            "volumen": int(self.escala.get_value()),
+        }
+        guardar_sonido(self.ajustes)
+        parar_sonido()
+        if self.ajustes["activo"]:
+            arrancar_sonido()
+        self.actualizar_estado()
+
+    # ── eventos ─────────────────────────────────────────────────────────────
+    def on_activar(self, *_):
+        if not self._listo:
+            return
+        self.aplicar()
+
+    def on_cambiar_pack(self, *_):
+        if not self._listo:
+            return
+        self.aplicar()
+
+    def on_cambiar_volumen(self, *_):
+        if not self._listo:
+            return
+        self.aplicar()
+
+    def on_probar(self, *_):
+        pack = self.pack_actual()
+        volumen = int(self.escala.get_value())
+        carpeta = AUDIO_PACKS / pack
+        sonido = carpeta / "sound.ogg"
+        if not sonido.exists():
+            candidatos = sorted(carpeta.glob("*.ogg")) + sorted(carpeta.glob("*.wav"))
+            if not candidatos:
+                self.estado.set_text("Ese pack no tiene sonidos.")
+                return
+            sonido = candidatos[0]
+        try:
+            subprocess.Popen(["pw-play", "--volume", str(volumen), str(sonido)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            self.estado.set_text(f"Reproduciendo una muestra de {pack}…")
+        except Exception:
+            self.estado.set_text("No pude reproducir la muestra (¿falta pw-play?).")
 
 
 # ─────────────────────────── visor de capturas ──────────────────────────────
