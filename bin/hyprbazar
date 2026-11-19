@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Temas de Hyprland — selector visual de temas con vista previa.
+HyprBazar — bazar de temas para Hyprland: fondos, paletas y temas de la comunidad.
 
 Muestra una tarjeta por cada tema de ~/.config/hypr/temas/temas.txt con el
 fondo de pantalla como miniatura, y lo aplica al pulsarla (llamando a
@@ -47,24 +47,24 @@ def _local_bin(nombre, alternativo):
 
 PALETA = _local_bin("hyprbazar-paleta", "paleta")
 CSS_APP = """
-.wall-card { border-radius: 14px; padding: 0; background: alpha(currentColor, 0.05); }
-.wall-card:hover { background: alpha(currentColor, 0.09); }
-.wall-card image { border-radius: 12px; }
-.wall-capa {
-  background: linear-gradient(to top, alpha(black, 0.78), alpha(black, 0.0));
-  padding: 26px 12px 10px 12px;
-  border-radius: 0 0 13px 13px;
+.wall-card {
+  border-radius: 14px;
+  padding: 0;
+  background: alpha(currentColor, 0.05);
+  transition: background 120ms ease-in-out;
 }
-.wall-nombre { font-weight: 700; color: white; }
-.wall-sub { font-size: 0.82em; color: alpha(white, 0.72); }
+.wall-card:hover { background: alpha(currentColor, 0.10); }
+.wall-img { border-radius: 13px 13px 0 0; background: alpha(currentColor, 0.08); }
+.wall-pie { padding: 8px 12px 10px 12px; }
+.wall-nombre { font-weight: 700; }
+.wall-sub { font-size: 0.8em; opacity: 0.6; }
 .wall-chip {
-  background: alpha(@accent_color, 0.9);
-  color: white;
+  background: rgba(120, 170, 255, 0.22);
   border-radius: 999px;
-  padding: 1px 10px;
+  padding: 2px 10px;
   font-size: 0.78em;
+  font-weight: 600;
 }
-.wall-accion { border-radius: 999px; font-weight: 600; }
 """
 
 CACHE_TIENDA = Path.home() / ".cache" / "tienda"
@@ -206,8 +206,8 @@ def traducir_nombre(texto: str):
 # ────────────────────────────── ventana ─────────────────────────────────────
 class Ventana(Gtk.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="Temas de Hyprland")
-        self.set_default_size(980, 700)
+        super().__init__(application=app, title="HyprBazar")
+        self.set_default_size(1120, 780)
         self.temas = []
         self.botones = {}
         self.etiquetas = {}
@@ -258,15 +258,16 @@ class Ventana(Gtk.ApplicationWindow):
 
         self.flujo = Gtk.FlowBox()
         self.flujo.set_valign(Gtk.Align.START)
-        self.flujo.set_max_children_per_line(4)
-        self.flujo.set_min_children_per_line(1)
+        self.flujo.set_homogeneous(True)
+        self.flujo.set_max_children_per_line(3)
+        self.flujo.set_min_children_per_line(2)
         self.flujo.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.flujo.set_margin_top(8)
-        self.flujo.set_margin_bottom(8)
-        self.flujo.set_margin_start(10)
-        self.flujo.set_margin_end(10)
-        self.flujo.set_row_spacing(4)
-        self.flujo.set_column_spacing(4)
+        self.flujo.set_margin_top(10)
+        self.flujo.set_margin_bottom(12)
+        self.flujo.set_margin_start(14)
+        self.flujo.set_margin_end(14)
+        self.flujo.set_row_spacing(10)
+        self.flujo.set_column_spacing(10)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
@@ -333,6 +334,7 @@ class Ventana(Gtk.ApplicationWindow):
         )
 
     def tarjeta(self, t, actual):
+        # ── imagen ──
         imagen = Gtk.Picture.new_for_paintable(None)
         thumb = miniatura(t["fondo"])
         if thumb:
@@ -341,12 +343,22 @@ class Ventana(Gtk.ApplicationWindow):
             except Exception:
                 pass
         imagen.set_content_fit(Gtk.ContentFit.COVER)
-        imagen.set_size_request(360, 190)
         imagen.set_can_shrink(True)
+        imagen.set_hexpand(True)
+        imagen.set_vexpand(True)
+        imagen.set_size_request(240, 150)
 
-        capa = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        capa.add_css_class("wall-capa")
-        capa.set_valign(Gtk.Align.END)
+        marco_img = Gtk.Frame()
+        marco_img.add_css_class("wall-img")
+        marco_img.set_child(imagen)
+        marco_img.set_overflow(Gtk.Overflow.HIDDEN)
+
+        # ── pie: nombre + archivo + chip "En uso" ──
+        pie = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        pie.add_css_class("wall-pie")
+
+        textos = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        textos.set_hexpand(True)
 
         nombre = Gtk.Label(label=t["nombre"])
         nombre.set_xalign(0)
@@ -356,26 +368,27 @@ class Ventana(Gtk.ApplicationWindow):
 
         sub = Gtk.Label(label=Path(t["fondo"]).name if t["fondo"] else "sin fondo")
         sub.set_xalign(0)
-        sub.set_ellipsize(3)
+        sub.set_ellipsize(2)
         sub.add_css_class("wall-sub")
 
-        capa.append(nombre)
-        capa.append(sub)
+        textos.append(nombre)
+        textos.append(sub)
+        pie.append(textos)
 
         if t["n"] == actual:
-            chip = Gtk.Label(label="● En uso")
+            chip = Gtk.Label(label="En uso")
             chip.add_css_class("wall-chip")
-            chip.set_halign(Gtk.Align.START)
-            chip.set_margin_bottom(4)
-            capa.insert_child_after(chip, None) if False else capa.prepend(chip)
+            chip.set_valign(Gtk.Align.CENTER)
+            pie.append(chip)
 
-        overlay = Gtk.Overlay()
-        overlay.set_child(imagen)
-        overlay.add_overlay(capa)
+        caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        caja.append(marco_img)
+        caja.append(pie)
 
         boton = Gtk.Button()
-        boton.set_child(overlay)
+        boton.set_child(caja)
         boton.add_css_class("wall-card")
+        boton.set_hexpand(True)
         boton.set_tooltip_text(f"{t['nombre']}\n{t['fondo']}\nIconos: {t['iconos'] or '—'}")
         boton.connect("clicked", lambda *_, n=t["n"], nm=t["nombre"]: self.aplicar(n, nm))
         return boton
