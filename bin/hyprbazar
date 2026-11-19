@@ -802,12 +802,16 @@ CSS_TIENDA = """
 class TiendaPage(Gtk.Box):
     """Tienda de temas de la comunidad: buscador, capturas y descripciones traducidas."""
 
+    # nombre visible, búsqueda en GitHub y explicación (en el tooltip)
     CATEGORIAS = [
-        ("Todo", "hyprland themes"),
-        ("Rices", "hyprland dotfiles rice"),
-        ("Fondos", "hyprland wallpapers"),
-        ("Shells", "quickshell hyprland shell"),
-        ("Catppuccin", "catppuccin hyprland"),
+        ("Todo", "hyprland themes", "Temas de todo tipo, sin filtrar"),
+        ("Escritorios", "hyprland dotfiles rice",
+         "Rices: escritorios enteros ya montados (barras, widgets, colores…), listos para copiar ideas"),
+        ("Fondos", "hyprland wallpapers", "Solo fondos de pantalla"),
+        ("Barras", "quickshell hyprland shell",
+         "Shells: programas que dibujan la barra, el dock y los widgets (quickshell, ags, eww)"),
+        ("Catppuccin", "catppuccin hyprland",
+         "Catppuccin: la paleta pastel más popular, con temas para casi todo"),
     ]
 
     def __init__(self, ventana):
@@ -837,10 +841,11 @@ class TiendaPage(Gtk.Box):
         chips.set_margin_top(2)
         chips.set_margin_start(14)
         chips.set_margin_end(14)
-        for nombre, consulta in self.CATEGORIAS:
+        for nombre, consulta, ayuda in self.CATEGORIAS:
             b = Gtk.Button(label=nombre)
             b.add_css_class("store-chip")
             b.add_css_class("flat")
+            b.set_tooltip_text(ayuda)
             b.connect("clicked", lambda *_, q=consulta: self.buscar(q))
             chips.append(b)
 
