@@ -398,10 +398,55 @@ class Ventana(Gtk.ApplicationWindow):
         carpeta.set_tooltip_text("Abrir la carpeta donde está este fondo")
         carpeta.connect("clicked", lambda *_, f=t["fondo"]: self.abrir_carpeta(f))
         acciones.append(carpeta)
+
+        quitar = Gtk.Button(label="Quitar")
+        quitar.add_css_class("flat")
+        quitar.set_tooltip_text("Quitar este fondo de la lista (el archivo no se borra)")
+        quitar.connect("clicked", lambda *_, n=t["n"]: self.quitar_fondo(n))
+        acciones.append(quitar)
         caja.append(acciones)
 
         caja.set_tooltip_text(f"{t['nombre']}\n{t['fondo']}\nIconos: {t['iconos'] or '—'}")
         return caja
+
+    def quitar_fondo(self, numero):
+        """Quita de la lista el fondo número `numero` (no borra el archivo)."""
+        try:
+            lineas = LISTA.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            return
+
+        validas = 0
+        salida = []
+        quitado = False
+        for linea in lineas:
+            s = linea.strip()
+            if not s or s.startswith("#"):
+                salida.append(linea)
+                continue
+            validas += 1
+            if validas == numero and not quitado:
+                quitado = True
+                continue
+            salida.append(linea)
+
+        if not quitado:
+            return
+        LISTA.write_text("\n".join(salida) + "\n", encoding="utf-8")
+
+        # el "tema actual" se guarda como número de línea: hay que recolocarlo
+        try:
+            act = int(ACTUAL.read_text(encoding="utf-8").strip())
+        except Exception:
+            act = 0
+        if act:
+            if numero < act:
+                ACTUAL.write_text(str(act - 1), encoding="utf-8")
+            elif numero == act:
+                ACTUAL.unlink(missing_ok=True)
+
+        self.estado.set_text("Fondo quitado de la lista (el archivo sigue en disco).")
+        self.cargar()
 
     def abrir_carpeta(self, ruta):
         if not ruta:
