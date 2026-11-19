@@ -140,30 +140,41 @@ def traducir(texto):
         cache[texto] = salida
     return salida
 
-def primera_imagen(repo):
-    """Primera captura del README (evita escudos de badges)."""
+def capturas(repo):
+    """Imágenes y vídeos que enseña el README del repo (sin los escudos)."""
     import re
     try:
         url = f"https://raw.githubusercontent.com/{repo}/HEAD/README.md"
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "tienda-dsh"}), timeout=15) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "hyprbazar"}), timeout=15) as r:
             texto = r.read().decode("utf-8", "replace")
     except Exception:
-        return ""
-    candidatas = re.findall(r"!\[[^\]]*\]\(([^)\s]+)", texto) + re.findall(r"<img[^>]+src=[\"']([^\"']+)", texto)
+        return []
+
+    candidatas = (re.findall(r"!\[[^\]]*\]\(([^)\s]+)", texto)
+                 + re.findall(r"<img[^>]+src=[\"']([^\"']+)", texto)
+                 + re.findall(r"\[!\[[^\]]*\]\(([^)]+)\)\]", texto)
+                 + re.findall(r"<video[^>]+src=[\"']([^\"']+)", texto))
+
+    salida = []
     for c in candidatas:
-        if any(x in c.lower() for x in ("shields.io", "badge", "badgen", "workflow", "travis", "codecov", "star-history")):
+        bajo = c.lower()
+        if any(x in bajo for x in ("shields.io", "badge", "badgen", "workflow",
+                                   "travis", "codecov", "star-history")):
             continue
-        if c.startswith("http"):
-            return c
-        if c.startswith("/"):
-            return "https://raw.githubusercontent.com" + c
-        return f"https://raw.githubusercontent.com/{repo}/HEAD/{c.lstrip('./')}"
-    return ""
+        if bajo.startswith("http"):
+            final = c
+        elif c.startswith("/"):
+            final = "https://raw.githubusercontent.com" + c
+        else:
+            final = f"https://raw.githubusercontent.com/{repo}/HEAD/{c.lstrip('./')}"
+        if final not in salida:
+            salida.append(final)
+    return salida[:10]
 
 
 textos = [i.get("description") or "" for i in items]
 with ThreadPoolExecutor(max_workers=6) as ex:
-    imagenes = list(ex.map(primera_imagen, [i["full_name"] for i in items]))
+    imagenes = list(ex.map(capturas, [i["full_name"] for i in items]))
 with ThreadPoolExecutor(max_workers=6) as ex:
     traducciones = list(ex.map(traducir, textos))
 
@@ -173,7 +184,7 @@ try:
 except Exception:
     pass
 
-for item, es, img in zip(items, traducciones, imagenes):
+for item, es, imgs in zip(items, traducciones, imagenes):
     print(json.dumps({
         "repo": item["full_name"],
         "nombre": item["name"],
@@ -182,8 +193,9 @@ for item, es, img in zip(items, traducciones, imagenes):
         "descripcion_es": es,
         "avatar": item["owner"]["avatar_url"],
         "url": item["html_url"],
-        "banner": img,
-        "imagen": img,
+        "banner": (imgs[0] if imgs else ""),
+        "imagen": (imgs[0] if imgs else ""),
+        "capturas": imgs,
         "temas": item.get("topics") or [],
         "lenguaje": item.get("language") or "",
         "actualizado": (item.get("pushed_at") or "")[:10],

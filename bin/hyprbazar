@@ -774,6 +774,148 @@ class PaletasPage(Gtk.Box):
 
 
 
+
+# ─────────────────────────── visor de capturas ──────────────────────────────
+class VistaCapturas(Gtk.Window):
+    """Enseña dentro de la app las capturas (y vídeos) del repo elegido."""
+
+    CACHE_CAPTURAS = Path.home() / ".cache" / "tienda" / "capturas"
+    VIDEO = (".mp4", ".webm", ".mov", ".mkv", ".gif")
+
+    def __init__(self, padre, repo, urls, pagina_github):
+        super().__init__(title=f"Capturas de {repo}", transient_for=padre, modal=False)
+        self.set_default_size(980, 720)
+        self.repo = repo
+        self.urls = urls or []
+        self.pagina_github = pagina_github
+
+        cab = Gtk.HeaderBar()
+        cab.set_title_widget(Gtk.Label(label=repo))
+        self.set_titlebar(cab)
+
+        ver_github = Gtk.Button(label="Ver en GitHub")
+        ver_github.connect("clicked", lambda *_: abrir_con_sistema(pagina_github))
+        cab.pack_end(ver_github)
+
+        self.estado = Gtk.Label(label="")
+        self.estado.set_xalign(0)
+        self.estado.add_css_class("page-footer-text")
+        pie = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        pie.add_css_class("page-footer")
+        pie.append(self.estado)
+
+        self.flujo = Gtk.FlowBox()
+        self.flujo.set_valign(Gtk.Align.START)
+        self.flujo.set_homogeneous(True)
+        self.flujo.set_max_children_per_line(2)
+        self.flujo.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.flujo.set_margin_top(10)
+        self.flujo.set_margin_bottom(10)
+        self.flujo.set_margin_start(12)
+        self.flujo.set_margin_end(12)
+        self.flujo.set_row_spacing(10)
+        self.flujo.set_column_spacing(10)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_child(self.flujo)
+
+        raiz = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        raiz.append(scroll)
+        raiz.append(pie)
+        self.set_child(raiz)
+
+        if not self.urls:
+            self.estado.set_text("Este repo no enseña capturas en su README.")
+        else:
+            self.estado.set_text(f"{len(self.urls)} capturas · pulsa una para abrirla en grande")
+            for u in self.urls:
+                self.flujo.append(self.tarjeta(u))
+
+    def es_video(self, url):
+        return url.lower().endswith(self.VIDEO)
+
+    def cache_local(self, url):
+        self.CACHE_CAPTURAS.mkdir(parents=True, exist_ok=True)
+        import hashlib
+
+        clave = hashlib.sha1(url.encode()).hexdigest()[:16]
+        return self.CACHE_CAPTURAS / f"{clave}.png"
+
+    def tarjeta(self, url):
+        caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        caja.add_css_class("wall-card")
+
+        imagen = Gtk.Picture.new_for_paintable(None)
+        imagen.set_content_fit(Gtk.ContentFit.COVER)
+        imagen.set_can_shrink(True)
+        imagen.set_hexpand(True)
+        imagen.set_size_request(320, 180)
+
+        marco = Gtk.Frame()
+        marco.add_css_class("store-banner")
+        marco.set_child(imagen)
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
+
+        boton = Gtk.Button()
+        boton.set_child(marco)
+        boton.add_css_class("flat")
+        boton.set_tooltip_text("Abrir en grande" if not self.es_video(url) else "Reproducir el vídeo")
+        boton.connect("clicked", lambda *_, u=url: abrir_con_sistema(u))
+        caja.append(boton)
+
+        destino = self.cache_local(url)
+
+        def enseñar():
+            if not destino.exists() or destino.stat().st_size < 500:
+                return False
+            try:
+                textura = Gdk.Texture.new_from_filename(str(destino))
+            except Exception:
+                return False
+            imagen.set_paintable(textura)
+            return False
+
+        def descargar():
+            if destino.exists() and destino.stat().st_size > 500:
+                GLib.idle_add(enseñar)
+                return
+            try:
+                if self.es_video(url):
+                    # sacar un fotograma del vídeo como miniatura
+                    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "1",
+                                    "-i", url, "-frames:v", "1",
+                                    "-vf", "scale=640:-1", str(destino)],
+                                   capture_output=True, timeout=90)
+                else:
+                    crudo = destino.with_suffix(".orig")
+                    subprocess.run(["curl", "-sSL", "--max-time", "40", "-o", str(crudo), url],
+                                   capture_output=True, timeout=50)
+                    subprocess.run(["magick", str(crudo), "-thumbnail", "640x360^",
+                                    "-gravity", "center", "-extent", "640x360",
+                                    "-strip", str(destino)], capture_output=True, timeout=40)
+                    crudo.unlink(missing_ok=True)
+            except Exception:
+                pass
+            GLib.idle_add(enseñar)
+
+        threading.Thread(target=descargar, daemon=True).start()
+
+        pie_item = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        pie_item.add_css_class("wall-pie")
+        tipo = Gtk.Label(label="Vídeo" if self.es_video(url) else "Imagen")
+        tipo.add_css_class("store-badge")
+        pie_item.append(tipo)
+        nombre = Gtk.Label(label=url.rsplit("/", 1)[-1][:40])
+        nombre.set_xalign(0)
+        nombre.set_ellipsize(2)
+        nombre.set_hexpand(True)
+        nombre.add_css_class("store-desc")
+        pie_item.append(nombre)
+        caja.append(pie_item)
+        return caja
+
+
 # ────────────────────────────── tienda ──────────────────────────────────────
 CSS_TIENDA = """
 .store-card {
@@ -973,6 +1115,12 @@ class TiendaPage(Gtk.Box):
         instalar.connect("clicked", lambda *_, rr=repo, b=instalar: self.instalar(rr, b))
         acciones.append(instalar)
 
+        capturas_btn = Gtk.Button(label="Ver capturas")
+        capturas_btn.add_css_class("flat")
+        capturas_btn.set_tooltip_text("Ver las imágenes y vídeos del repo sin salir de la app")
+        capturas_btn.connect("clicked", lambda *_, rr=r: self.ver_capturas(rr))
+        acciones.append(capturas_btn)
+
         ver = Gtk.Button(label="Ver en GitHub")
         ver.add_css_class("flat")
         ver.connect("clicked", lambda *_, u=r.get("url", ""): abrir_con_sistema(u))
@@ -1060,6 +1208,11 @@ class TiendaPage(Gtk.Box):
 
         threading.Thread(target=trabajo, daemon=True).start()
         return marco
+
+    def ver_capturas(self, r):
+        urls = r.get("capturas") or ([r.get("banner")] if r.get("banner") else [])
+        ventana = VistaCapturas(self.ventana, r.get("repo", ""), urls, r.get("url", ""))
+        ventana.present()
 
     def instalar(self, repo, boton):
         boton.set_sensitive(False)
