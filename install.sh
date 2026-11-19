@@ -37,6 +37,22 @@ for f in hyprbazar hyprbazar-paleta hyprbazar-tienda; do
     echo "  $f -> $BIN/$f"
 done
 
+# ── icono ──────────────────────────────────────────────────────────────────
+ICONOS="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+if [ -f "$AQUI/assets/hyprbazar.svg" ]; then
+    for tam in 512 256 128 64 48 32; do
+        mkdir -p "$ICONOS/${tam}x${tam}/apps"
+        if command -v magick >/dev/null 2>&1; then
+            magick -background none "$AQUI/assets/hyprbazar.svg" -resize "${tam}x${tam}" \
+                "$ICONOS/${tam}x${tam}/apps/hyprbazar.png" 2>/dev/null || true
+        fi
+    done
+    mkdir -p "$ICONOS/scalable/apps"
+    cp -f "$AQUI/assets/hyprbazar.svg" "$ICONOS/scalable/apps/hyprbazar.svg"
+    gtk-update-icon-cache -f -t "$ICONOS" >/dev/null 2>&1 || true
+    echo "  icono -> $ICONOS"
+fi
+
 cat > "$APPS/hyprbazar.desktop" <<'DESK'
 [Desktop Entry]
 Type=Application
@@ -44,7 +60,7 @@ Version=1.0
 Name=HyprBazar
 Comment=Temas, fondos y paletas para Hyprland
 Exec=hyprbazar
-Icon=preferences-desktop-theme
+Icon=hyprbazar
 Terminal=false
 Categories=Settings;DesktopSettings;
 Keywords=tema;temas;fondo;wallpaper;paleta;hyprland;

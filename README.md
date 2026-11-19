@@ -1,3 +1,5 @@
+<img src="assets/hyprbazar.svg" width="96" align="left" alt="Icono de HyprBazar">
+
 # HyprBazar
 
 **Estantería de temas para Hyprland**: elige fondos de pantalla, aplica paletas de
