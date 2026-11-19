@@ -47,6 +47,12 @@ def _local_bin(nombre, alternativo):
 
 PALETA = _local_bin("hyprbazar-paleta", "paleta")
 CSS_APP = """
+.page-toolbar { padding: 10px 14px 4px 14px; }
+.page-footer {
+  padding: 6px 16px 10px 16px;
+  background: alpha(currentColor, 0.03);
+}
+.page-footer-text { font-size: 0.85em; opacity: 0.65; }
 .wall-card {
   border-radius: 14px;
   padding: 0;
@@ -223,38 +229,38 @@ class Ventana(Gtk.ApplicationWindow):
         cabecera.set_title_widget(selector)
         self.set_titlebar(cabecera)
 
-        caja_cab = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        # ── barra de herramientas: buscar + acciones ──
+        barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        barra.add_css_class("page-toolbar")
 
-        btn_aleatorio = Gtk.Button(label="Aleatorio")
-        btn_aleatorio.set_tooltip_text("Aplica un tema al azar")
-        btn_aleatorio.connect("clicked", self.on_aleatorio)
-        caja_cab.append(btn_aleatorio)
-
-        btn_recargar = Gtk.Button(label="Recargar")
-        btn_recargar.set_tooltip_text("Vuelve a leer temas.txt y regenera las miniaturas")
-        btn_recargar.connect("clicked", lambda *_: self.cargar())
-        caja_cab.append(btn_recargar)
-
-        btn_anadir = Gtk.Button(label="Añadir tema…")
-        btn_anadir.set_tooltip_text("Añade un fondo que ya tengas en el equipo")
-        btn_anadir.connect("clicked", self.on_anadir)
-        caja_cab.append(btn_anadir)
-
-        btn_descargar = Gtk.Button(label="Descargar fondos…")
-        btn_descargar.set_tooltip_text("Descarga fondos nuevos y los añade como temas")
-        btn_descargar.connect("clicked", self.on_descargar)
-        caja_cab.append(btn_descargar)
-
-        self.caja_cab = caja_cab
-        cabecera.pack_end(caja_cab)
-
-        # barra de búsqueda + estado
-        self.busqueda = Gtk.SearchEntry(placeholder_text="Buscar tema…")
+        self.busqueda = Gtk.SearchEntry(placeholder_text="Buscar fondo…")
+        self.busqueda.set_hexpand(True)
         self.busqueda.connect("search-changed", lambda *_: self.filtrar())
+        barra.append(self.busqueda)
 
+        def boton(texto, tooltip, accion, clase=None):
+            b = Gtk.Button(label=texto)
+            b.set_tooltip_text(tooltip)
+            b.connect("clicked", lambda *_: accion())
+            if clase:
+                b.add_css_class(clase)
+            barra.append(b)
+            return b
+
+        boton("Aleatorio", "Aplica un fondo al azar", self.on_aleatorio, "flat")
+        boton("Recargar", "Vuelve a leer la lista y regenera las miniaturas",
+              lambda: self.cargar(), "flat")
+        boton("Añadir…", "Añade un fondo que ya tengas en el equipo", self.on_anadir, "flat")
+        boton("Descargar", "Descarga fondos nuevos y los añade a la lista",
+              self.on_descargar, "suggested-action")
+
+        # ── pie: cuántos hay y cuál está puesto ──
         self.estado = Gtk.Label(label="")
         self.estado.set_xalign(0)
-        self.estado.add_css_class("dim-label")
+        self.estado.add_css_class("page-footer-text")
+        pie = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        pie.add_css_class("page-footer")
+        pie.append(self.estado)
 
         self.flujo = Gtk.FlowBox()
         self.flujo.set_valign(Gtk.Align.START)
@@ -273,10 +279,10 @@ class Ventana(Gtk.ApplicationWindow):
         scroll.set_vexpand(True)
         scroll.set_child(self.flujo)
 
-        raiz = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        raiz.append(self.busqueda)
+        raiz = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        raiz.append(barra)
         raiz.append(scroll)
-        raiz.append(self.estado)
+        raiz.append(pie)
         self.pila.add_titled(raiz, "fondos", "Fondos de pantalla")
 
         self.pagina_paletas = PaletasPage(self)
@@ -295,7 +301,6 @@ class Ventana(Gtk.ApplicationWindow):
                 self.pagina_paletas.generar_previas()
             if os.environ.get("TEMAS_TIENDA") == "1":
                 self.pila.set_visible_child_name("tienda")
-                self.caja_cab.set_visible(False)
                 consulta = os.environ.get("TEMAS_BUSCAR", "").strip()
                 if consulta:
                     self.pagina_tienda.busqueda.set_text(consulta)
@@ -310,7 +315,6 @@ class Ventana(Gtk.ApplicationWindow):
     def on_cambio_pagina(self, *_):
         nombre = self.pila.get_visible_child_name()
         # los botones de fondos solo tienen sentido en su pestaña
-        self.caja_cab.set_visible(nombre == "fondos")
         if nombre == "paletas":
             self.pagina_paletas.generar_previas()
 
@@ -529,15 +533,12 @@ class PaletasPage(Gtk.Box):
         self.botones = {}
 
         barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        barra.set_margin_top(6)
-        barra.set_margin_start(10)
-        barra.set_margin_end(10)
+        barra.add_css_class("page-toolbar")
 
-        self.etiqueta = Gtk.Label(label="")
-        self.etiqueta.set_xalign(0)
-        self.etiqueta.add_css_class("dim-label")
-        self.etiqueta.set_hexpand(True)
-        barra.append(self.etiqueta)
+        self.busqueda = Gtk.SearchEntry(placeholder_text="Buscar tema de color…")
+        self.busqueda.set_hexpand(True)
+        self.busqueda.connect("search-changed", lambda *_: self.filtrar())
+        barra.append(self.busqueda)
 
         self.con_fondo = Gtk.CheckButton(label="Con el fondo del tema")
         self.con_fondo.set_active(True)
@@ -546,13 +547,15 @@ class PaletasPage(Gtk.Box):
         )
         barra.append(self.con_fondo)
 
-        btn_descargar = Gtk.Button(label="Descargar / actualizar temas")
+        btn_descargar = Gtk.Button(label="Descargar / actualizar")
         btn_descargar.set_tooltip_text("Baja las paletas de los repositorios de temas")
+        btn_descargar.add_css_class("suggested-action")
         btn_descargar.connect("clicked", self.on_descargar)
         barra.append(btn_descargar)
 
-        btn_restaurar = Gtk.Button(label="Volver al tema del sistema")
-        btn_restaurar.set_tooltip_text("Deshace la paleta aplicada")
+        btn_restaurar = Gtk.Button(label="Volver al sistema")
+        btn_restaurar.set_tooltip_text("Deshace la paleta aplicada y deja tus colores de siempre")
+        btn_restaurar.add_css_class("flat")
         btn_restaurar.connect("clicked", self.on_restaurar)
         barra.append(btn_restaurar)
 
@@ -570,8 +573,16 @@ class PaletasPage(Gtk.Box):
         scroll.set_vexpand(True)
         scroll.set_child(self.flujo)
 
+        self.etiqueta = Gtk.Label(label="")
+        self.etiqueta.set_xalign(0)
+        self.etiqueta.add_css_class("page-footer-text")
+        pie = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        pie.add_css_class("page-footer")
+        pie.append(self.etiqueta)
+
         self.append(barra)
         self.append(scroll)
+        self.append(pie)
         self.cargar()
 
     def cargar(self):
@@ -631,6 +642,12 @@ class PaletasPage(Gtk.Box):
         boton.connect("clicked", lambda *_, i=ident, n=nombre: self.aplicar(i, n))
         self.botones[ident] = boton
         return boton
+
+    def filtrar(self):
+        texto = self.busqueda.get_text().strip().lower()
+        for ident, boton in self.botones.items():
+            nombre = (boton.get_tooltip_text() or ident).lower()
+            boton.set_visible(not texto or texto in nombre or texto in ident.lower())
 
     def on_descargar(self, *_):
         self.etiqueta.set_text("Descargando temas… (puede tardar un poco)")
@@ -740,9 +757,7 @@ class TiendaPage(Gtk.Box):
 
         # ── cabecera: buscador ──
         cab = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        cab.set_margin_top(10)
-        cab.set_margin_start(14)
-        cab.set_margin_end(14)
+        cab.add_css_class("page-toolbar")
 
         self.busqueda = Gtk.SearchEntry(placeholder_text="Buscar temas, rices, fondos…")
         self.busqueda.set_hexpand(True)
@@ -756,7 +771,7 @@ class TiendaPage(Gtk.Box):
 
         # ── categorías ──
         chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        chips.set_margin_top(8)
+        chips.set_margin_top(2)
         chips.set_margin_start(14)
         chips.set_margin_end(14)
         for nombre, consulta in self.CATEGORIAS:
@@ -768,10 +783,10 @@ class TiendaPage(Gtk.Box):
 
         self.estado = Gtk.Label(label="Busca temas de la comunidad; las descripciones se traducen solas.")
         self.estado.set_xalign(0)
-        self.estado.add_css_class("dim-label")
-        self.estado.set_margin_top(6)
-        self.estado.set_margin_start(16)
-        self.estado.set_margin_end(16)
+        self.estado.add_css_class("page-footer-text")
+        pie = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        pie.add_css_class("page-footer")
+        pie.append(self.estado)
 
         # ── rejilla de resultados ──
         self.flujo = Gtk.FlowBox()
@@ -791,8 +806,8 @@ class TiendaPage(Gtk.Box):
 
         self.append(cab)
         self.append(chips)
-        self.append(self.estado)
         self.append(scroll)
+        self.append(pie)
 
     # ── estado interno ──────────────────────────────────────────────────────
     @staticmethod
