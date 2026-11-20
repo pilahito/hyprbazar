@@ -67,6 +67,27 @@ hl.bind("SUPER + SHIFT + Y", hl.dsp.exec_cmd("hyprbazar"),
         { description = "HyprBazar (temas)" })
 ```
 
+## Aplicar el aspecto de un repo de la tienda
+
+Los repos con dotfiles de Hyprland que instales desde la **Tienda** tienen un
+botón **«Aplicar tema»**: coge **solo la parte visual** (huecos, borde, esquinas,
+opacidades, desenfoque y logo) y la aplica a tu escritorio.
+
+- **No copia** binds, `exec-once`, plugins ni ficheros completos: nada que pueda
+  romper tu configuración.
+- Antes de tocar nada guarda una foto de cómo estabas, y el botón
+  **«Volver a como estaba»** restaura tu aspecto anterior.
+- Lo aplicado vive en `~/.config/hypr/tema-repo.lua`, aparte de tu config.
+
+Desde terminal:
+
+```bash
+hyprbazar-tema listar            # repos ya descargados
+hyprbazar-tema ver owner-repo    # qué cambiaría, sin tocar nada
+hyprbazar-tema aplicar owner-repo
+hyprbazar-tema restaurar
+```
+
 ## Integración con Hyprland
 
 En [`hypr/`](hypr/) están los scripts de los **botones de ventana** (minimizar

@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""hyprbazar-tema — aplica los colores y formas de un tema de la comunidad.
+
+La tienda de HyprBazar descarga repos con dotfiles de Hyprland. Este programa
+coge **solo la parte visual** de esos repos y la aplica a tu Hyprland:
+
+  · general:    huecos (gaps), borde (tamaño y colores), layout
+  · decoration: esquinas (rounding), opacidades, desenfoque (blur)
+
+NO copia binds, ni exec-once, ni plugins, ni ficheros de configuración
+completos: nada de eso se toca. Todo lo aplicado queda en un fichero aparte
+(~/.config/hypr/tema-repo.lua) y antes se guarda una foto de cómo estabas,
+así que `restaurar` devuelve tu aspecto de siempre.
+
+Uso:
+    hyprbazar-tema listar              repos ya descargados
+    hyprbazar-tema ver <slug>          qué cambiaría (sin tocar nada)
+    hyprbazar-tema aplicar <slug>      aplica colores y formas
+    hyprbazar-tema restaurar           vuelve a como estabas
+    hyprbazar-tema estado              qué tema hay aplicado
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+DATOS = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "tienda"
+CONFIG_HYPR = Path.home() / ".config" / "hypr"
+FICHERO_TEMA = CONFIG_HYPR / "tema-repo.lua"
+HYPRLAND_LUA = CONFIG_HYPR / "hyprland.lua"
+SNAPSHOT = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "temas-repo"
+ESTADO = SNAPSHOT / "actual.json"
+MARCA_INI = "-- >>> tema de la comunidad (HyprBazar) >>>"
+MARCA_FIN = "-- <<< tema de la comunidad (HyprBazar) <<<"
+
+# Opciones que se aceptan del tema (el resto se ignora a propósito)
+ACEPTADAS = {
+    "general": ("gaps_in", "gaps_out", "border_size", "col.active_border",
+                "col.inactive_border", "layout", "resize_on_border",
+                "allow_tearing", "snap", "float_gaps"),
+    "decoration": ("rounding", "rounding_power", "active_opacity",
+                   "inactive_opacity", "fullscreen_opacity", "dim_inactive",
+                   "dim_strength", "border_part_of_window"),
+    "blur": ("enabled", "size", "passes", "ignore_opacity", "new_optimizations",
+             "xray", "noise", "contrast", "brightness", "vibrancy",
+             "vibrancy_darkness", "special", "popups", "popups_ignorealpha"),
+    "misc": ("force_default_wallpaper", "disable_hyprland_logo",
+             "disable_splash_rendering", "mouse_move_enables_dpms"),
+    "animations": ("enabled",),
+}
+
+COLOR = re.compile(r"^(rgba?\(|0x[0-9a-fA-F]{8}|0x[0-9a-fA-F]{6}|#?[0-9a-fA-F]{8})$")
+
+
+def repos():
+    if not DATOS.is_dir():
+        return []
+    return sorted(d.name for d in DATOS.iterdir() if (d / ".git").is_dir())
+
+
+def ficheros_config(carpeta):
+    """Ficheros de configuración de Hyprland dentro del repo, por prioridad."""
+    candidatos = []
+    for patron in ("hyprland.conf", "*.conf", "*.lua"):
+        for f in sorted(carpeta.rglob(patron)):
+            if ".git" in f.parts:
+                continue
+            # solo la configuración de Hyprland (hypridle, hyprlock, hyprpaper
+            # también tienen secciones general pero no pintan el escritorio)
+            if "hypr" in f.name.lower() and not f.name.lower().startswith("hyprland"):
+                continue
+            try:
+                texto = f.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            if re.search(r"^\s*(general\s*\{|decoration\s*\{)", texto, re.M) or "hl.config" in texto:
+                candidatos.append(f)
+    vistos, salida = set(), []
+    for f in candidatos:
+        if f not in vistos:
+            vistos.add(f)
+            salida.append(f)
+    return salida
+
+
+
+# ── configuraciones en Lua (hl.config) ──────────────────────────────────────
+TOKEN = re.compile(r'\s*(?:(?P<texto>"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')'
+                   r'|(?P<numero>-?\d+(?:\.\d+)?)|(?P<ident>[A-Za-z_][\w]*)|(?P<sigla>[{}\[\]=,]))')
+
+
+def tabla_lua(texto, pos):
+    """Lee una tabla Lua desde `pos` y devuelve (dict, pos_final)."""
+    resultado = {}
+    clave = None
+    # salta a la '{'
+    while pos < len(texto) and texto[pos] != "{":
+        pos += 1
+    pos += 1
+    while pos < len(texto):
+        while pos < len(texto) and texto[pos] in " \t\r\n,":
+            pos += 1
+        if pos >= len(texto):
+            break
+        if texto[pos] == "}":
+            return resultado, pos + 1
+        m = TOKEN.match(texto, pos)
+        if not m:
+            pos += 1
+            continue
+        pos = m.end()
+        if m.group("sigla") in ("=",):
+            continue
+        if m.group("sigla") == "{":
+            sub, pos = tabla_lua(texto, pos - 1)
+            if clave is not None:
+                resultado[clave] = sub
+                clave = None
+            continue
+        if m.group("sigla") == ",":
+            continue
+        if m.group("texto"):
+            valor = m.group("texto")[1:-1]
+            if clave is None:
+                clave = valor            # ["clave"] = valor
+            else:
+                resultado[clave] = valor
+                clave = None
+            continue
+        if m.group("numero"):
+            v = m.group("numero")
+            if clave is not None:
+                resultado[clave] = v
+                clave = None
+            continue
+        if m.group("ident"):
+            ident = m.group("ident")
+            if ident in ("true", "false") and clave is not None:
+                resultado[clave] = ident
+                clave = None
+            else:
+                clave = ident
+            continue
+    return resultado, pos
+
+
+def secciones_de_lua(texto):
+    """Extrae general/decoration/misc de los hl.config({...}) del fichero."""
+    salida = {"general": {}, "decoration": {}, "blur": {}, "misc": {}, "animations": {}}
+    for m in re.finditer(r"hl\.config\s*\(", texto):
+        tabla, _ = tabla_lua(texto, m.end())
+        for grupo, valores in tabla.items():
+            if not isinstance(valores, dict):
+                continue
+            destino = salida.get(grupo)
+            if destino is None:
+                continue
+            for clave, valor in valores.items():
+                if isinstance(valor, dict):
+                    if grupo == "decoration" and clave == "blur":
+                        for k2, v2 in valor.items():
+                            if k2 in ACEPTADAS["blur"] and not isinstance(v2, dict):
+                                salida["blur"][k2] = str(v2)
+                    continue
+                if clave in ACEPTADAS.get(grupo, ()):
+                    destino[clave] = str(valor)
+    return salida
+
+
+def extraer(texto):
+    """Saca las opciones visuales del texto de un .conf de Hyprland."""
+    encontrado = {"general": {}, "decoration": {}, "blur": {}, "misc": {}, "animations": {}}
+    if "hl.config" in texto:
+        lua = secciones_de_lua(texto)
+        for seccion, claves in lua.items():
+            encontrado[seccion].update(claves)
+    seccion = None
+    profundidad = 0
+    for linea in texto.splitlines():
+        limpia = re.sub(r"#.*$", "", linea).strip()
+        if not limpia:
+            continue
+        m = re.match(r"^([a-z_]+)\s*\{", limpia)
+        if m and m.group(1) in encontrado:
+            seccion = m.group(1)
+            profundidad = 1
+            continue
+        if seccion and "{" in limpia:
+            profundidad += 1
+            # blur anidado dentro de decoration
+            m2 = re.match(r"^(blur)\s*\{", limpia)
+            if m2 and seccion == "decoration":
+                seccion = "blur"
+            continue
+        if seccion and "}" in limpia:
+            profundidad -= 1
+            if profundidad <= 0:
+                seccion = None
+            continue
+        if not seccion:
+            continue
+        if "=" in limpia:
+            clave, valor = [p.strip() for p in limpia.split("=", 1)]
+            if clave in ACEPTADAS.get(seccion, ()):
+                encontrado[seccion][clave] = valor
+    return encontrado
+
+
+def a_lua(valor):
+    """Convierte el valor de un .conf al literal Lua equivalente."""
+    if valor.lower() in ("true", "false"):
+        return valor.lower()
+    if COLOR.match(valor):
+        return f'"{valor}"'
+    if re.match(r"^-?\d+$", valor):
+        return valor
+    if re.match(r"^-?\d*\.\d+$", valor):
+        return valor
+    if valor.startswith("[") or valor.startswith("{"):
+        return valor
+    return f'"{valor}"'
+
+
+def valores_actuales(secciones):
+    """Valores que tiene ahora Hyprland para esas opciones (para poder volver)."""
+    foto = {}
+    for seccion, claves in secciones.items():
+        for clave in claves:
+            ruta = f"{seccion}:{clave}" if seccion != "blur" else f"decoration:blur:{clave}"
+            try:
+                r = subprocess.run(["hyprctl", "getoption", ruta], capture_output=True,
+                                   text=True, timeout=10)
+                texto = r.stdout
+                if not texto.strip():
+                    continue
+                # hyprctl devuelve líneas "option: ...", "int: ...", "custom type: ..."
+                valor = ""
+                tipo = ""
+                for linea in texto.splitlines():
+                    if linea.startswith("option:"):
+                        continue
+                    if ":" in linea:
+                        tipo, valor = linea.split(":", 1)
+                        valor = valor.strip()
+                foto[ruta] = {"tipo": tipo.strip(), "valor": valor}
+            except Exception:
+                continue
+    return foto
+
+
+def lua_de(secciones):
+    lineas = ["-- Generado por HyprBazar al aplicar un tema de la comunidad.",
+              "-- NO editar a mano: se reescribe al aplicar otro tema.",
+              "-- Para volver a tu aspecto anterior: hyprbazar-tema restaurar",
+              MARCA_INI,
+              "hl.config({"]
+    # Ojo: en una tabla Lua no se puede repetir la misma clave (la segunda
+    # pisaría a la primera), así que decoration y su blur van JUNTOS.
+    for seccion in ("general", "decoration", "misc", "animations"):
+        claves = secciones.get(seccion) or {}
+        blur = secciones.get("blur") or {}
+        if not claves and not (seccion == "decoration" and blur):
+            continue
+        lineas.append(f"\t{seccion} = {{")
+        if seccion == "decoration" and blur:
+            lineas.append("\t\tblur = {")
+            for clave, valor in blur.items():
+                lineas.append(f"\t\t\t{clave} = {a_lua(valor)},")
+            lineas.append("\t\t},")
+        for clave, valor in claves.items():
+            lineas.append(f"\t\t{clave} = {a_lua(valor)},")
+        lineas.append("\t},")
+    lineas += ["})", MARCA_FIN, ""]
+    return "\n".join(lineas)
+
+
+def incluir_en_hyprland():
+    """Mete el require de tema-repo.lua en la config, sin duplicarlo."""
+    if not HYPRLAND_LUA.exists():
+        return False
+    texto = HYPRLAND_LUA.read_text(encoding="utf-8")
+    if 'require("tema-repo")' in texto or "require('tema-repo')" in texto:
+        return True
+    bloque = ('\n-- Tema de la comunidad aplicado desde HyprBazar (se puede quitar).\n'
+              'pcall(function() require("tema-repo") end)\n')
+    HYPRLAND_LUA.write_text(texto.rstrip() + "\n" + bloque, encoding="utf-8")
+    return True
+
+
+def cmd_ver(slug):
+    carpeta = DATOS / slug
+    if not carpeta.is_dir():
+        raise SystemExit(f"no existe el repo {slug}. Instálalo antes desde la tienda.")
+    total = {"general": {}, "decoration": {}, "blur": {}, "misc": {}, "animations": {}}
+    fuentes = ficheros_config(carpeta)
+    for f in fuentes:
+        trozos = extraer(f.read_text(encoding="utf-8", errors="replace"))
+        for seccion, claves in trozos.items():
+            for clave, valor in claves.items():
+                total[seccion].setdefault(clave, valor)
+    print(f"repo: {slug}")
+    print(f"ficheros de configuración encontrados: {len(fuentes)}")
+    for f in fuentes[:6]:
+        print(f"  · {f.relative_to(carpeta)}")
+    for seccion, claves in total.items():
+        if not claves:
+            continue
+        print(f"\n[{seccion}]")
+        for clave, valor in claves.items():
+            print(f"  {clave} = {valor}")
+    return total
+
+
+def cmd_aplicar(slug):
+    total = cmd_ver(slug)
+    if not any(total.values()):
+        raise SystemExit("ese repo no tiene opciones visuales que aplicar (¿solo fondos?).")
+
+    SNAPSHOT.mkdir(parents=True, exist_ok=True)
+    foto = valores_actuales({k: v for k, v in total.items() if v})
+    if not SNAPSHOT.joinpath("antes.json").exists():
+        SNAPSHOT.joinpath("antes.json").write_text(
+            json.dumps(foto, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    FICHERO_TEMA.write_text(lua_de(total), encoding="utf-8")
+    incluir_en_hyprland()
+    ESTADO.write_text(json.dumps({"slug": slug}, indent=1), encoding="utf-8")
+
+    print("\nAplicando…")
+    subprocess.run(["hyprctl", "reload"], capture_output=True, timeout=60)
+    arreglo = CONFIG_HYPR / "winbuttons" / "arreglar-barras.sh"
+    if arreglo.exists():
+        subprocess.run(["bash", str(arreglo)], capture_output=True, timeout=120)
+    print(f"tema aplicado: {slug}")
+    print("si algo no te gusta:  hyprbazar-tema restaurar")
+
+
+def cmd_restaurar():
+    antes = SNAPSHOT / "antes.json"
+    if not antes.exists():
+        raise SystemExit("no hay ningún tema aplicado del que volver.")
+    foto = json.loads(antes.read_text(encoding="utf-8"))
+    FICHERO_TEMA.unlink(missing_ok=True)
+    if HYPRLAND_LUA.exists():
+        texto = HYPRLAND_LUA.read_text(encoding="utf-8")
+        texto = re.sub(r"\n-- Tema de la comunidad aplicado desde HyprBazar.*?\npcall\(function\(\) require\(\"tema-repo\"\) end\)\n",
+                       "\n", texto, flags=re.S)
+        HYPRLAND_LUA.write_text(texto, encoding="utf-8")
+    subprocess.run(["hyprctl", "reload"], capture_output=True, timeout=60)
+    arreglo = CONFIG_HYPR / "winbuttons" / "arreglar-barras.sh"
+    if arreglo.exists():
+        subprocess.run(["bash", str(arreglo)], capture_output=True, timeout=120)
+    ESTADO.unlink(missing_ok=True)
+    antes.unlink(missing_ok=True)
+    print("aspecto anterior restaurado (config recargada).")
+
+
+def cmd_estado():
+    if ESTADO.exists():
+        try:
+            print("tema aplicado:", json.loads(ESTADO.read_text(encoding="utf-8")).get("slug", "?"))
+        except Exception:
+            print("tema aplicado: (no se pudo leer)")
+    else:
+        print("tema aplicado: ninguno (aspecto original)")
+
+
+def main():
+    orden = sys.argv[1] if len(sys.argv) > 1 else "ayuda"
+    argumento = sys.argv[2] if len(sys.argv) > 2 else ""
+    if orden == "listar":
+        for nombre in repos():
+            print(nombre)
+    elif orden == "ver":
+        cmd_ver(argumento)
+    elif orden == "aplicar":
+        if not argumento:
+            raise SystemExit("uso: hyprbazar-tema aplicar <slug>")
+        cmd_aplicar(argumento)
+    elif orden == "restaurar":
+        cmd_restaurar()
+    elif orden == "estado":
+        cmd_estado()
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

@@ -1030,6 +1030,7 @@ class PaletasPage(Gtk.Box):
 CONFIG_SONIDO = Path.home() / ".config" / "hyprbazar" / "sonido.json"
 AUDIO_PACKS = Path.home() / ".local" / "share" / "mechsim" / "audio"
 JUGADOR = Path.home() / ".local" / "bin" / "teclado-sonido"
+TEMA_REPO = Path.home() / ".local" / "bin" / "hyprbazar-tema"
 
 
 def leer_sonido():
@@ -1693,7 +1694,76 @@ class TiendaPage(Gtk.Box):
         acciones.append(ver)
         caja.append(acciones)
 
+        # ── aplicar el aspecto del repo (colores y formas, nada de binds) ──
+        if repo in self.instalados:
+            fila_tema = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            aplicado = self._tema_aplicado() == self._slug(repo)
+            boton_tema = Gtk.Button(
+                label="Aplicar tema" if not aplicado else "Aplicar otra vez")
+            boton_tema.add_css_class("store-instalar")
+            boton_tema.set_tooltip_text(
+                "Aplica los colores, huecos y esquinas de este repo (no toca binds ni plugins)")
+            boton_tema.connect("clicked",
+                               lambda *_, rr=repo, b=boton_tema: self.aplicar_tema(rr, b))
+            fila_tema.append(boton_tema)
+            if aplicado:
+                restaurar = Gtk.Button(label="Volver a como estaba")
+                restaurar.add_css_class("flat")
+                restaurar.connect("clicked", lambda *_: self.restaurar_tema())
+                fila_tema.append(restaurar)
+            caja.append(fila_tema)
+
         return caja
+
+    @staticmethod
+    def _slug(repo):
+        return repo.replace("/", "-")
+
+    def _tema_aplicado(self):
+        try:
+            r = subprocess.run([str(TEMA_REPO), "estado"], capture_output=True,
+                               text=True, timeout=10)
+            texto = r.stdout.strip()
+            return texto.split(":", 1)[1].strip() if ":" in texto else ""
+        except Exception:
+            return ""
+
+    def aplicar_tema(self, repo, boton):
+        slug = self._slug(repo)
+        boton.set_sensitive(False)
+        self.estado.set_text(f"Aplicando el tema de {repo}…")
+
+        def trabajo():
+            try:
+                r = subprocess.run([str(TEMA_REPO), "aplicar", slug],
+                                   capture_output=True, text=True, timeout=180)
+                salida = (r.stdout or "") + (r.stderr or "")
+                ok = r.returncode == 0
+            except Exception as error:  # noqa: BLE001
+                salida, ok = str(error), False
+            GLib.idle_add(self._fin_aplicar_tema, repo, ok, salida)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _fin_aplicar_tema(self, repo, ok, salida):
+        if ok:
+            self.estado.set_text(
+                f"Tema de {repo} aplicado · si no te gusta, «Volver a como estaba»")
+        else:
+            ultimo = [l for l in salida.splitlines() if l.strip()]
+            self.estado.set_text(
+                "No pude aplicar el tema: " + (ultimo[-1] if ultimo else "sin detalles"))
+        return False
+
+    def restaurar_tema(self):
+        def trabajo():
+            try:
+                subprocess.run([str(TEMA_REPO), "restaurar"], capture_output=True, timeout=180)
+            except Exception:
+                pass
+            GLib.idle_add(lambda: (self.estado.set_text("Aspecto anterior restaurado"), False)[1])
+
+        threading.Thread(target=trabajo, daemon=True).start()
 
     COLORES_LENGUAJE = {
         "Python": ("#2b5b84", "#12212f"), "Shell": ("#5c8a3a", "#1d2a15"),
