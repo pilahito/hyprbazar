@@ -52,7 +52,23 @@ def _local_bin(nombre, alternativo):
 
 PALETA = _local_bin("hyprbazar-paleta", "paleta")
 CSS_APP = """
+/* La ventana con fondo opaco: si no, al cambiar de pestaña se veía el fondo
+   de pantalla a través y parecía que faltaba contenido. */
+window, .background, .pagina { background-color: @window_bg_color; }
 .ventana-captura { background: @window_bg_color; }
+.tarjeta-ajustes {
+  background: alpha(currentColor, 0.055);
+  border-radius: 14px;
+  padding: 18px 20px;
+}
+.fila-ajustes { padding: 6px 0; }
+.chip-estado {
+  border-radius: 999px;
+  padding: 2px 12px;
+  font-weight: 600;
+  background: alpha(currentColor, 0.10);
+}
+.chip-encendido { background: alpha(@accent_bg_color, 0.35); }
 .page-toolbar { padding: 10px 14px 4px 14px; }
 .page-footer {
   padding: 6px 16px 10px 16px;
@@ -233,7 +249,7 @@ class Ventana(Gtk.ApplicationWindow):
 
         cabecera = Gtk.HeaderBar()
         self.pila = Gtk.Stack()
-        self.pila.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.pila.set_transition_type(Gtk.StackTransitionType.NONE)
         selector = Gtk.StackSwitcher()
         selector.set_stack(self.pila)
         cabecera.set_title_widget(selector)
@@ -366,6 +382,8 @@ class Ventana(Gtk.ApplicationWindow):
         # los botones de fondos solo tienen sentido en su pestaña
         if nombre == "paletas":
             self.pagina_paletas.generar_previas()
+        if nombre == "tienda":
+            self.pagina_tienda.auto_cargar()
 
     def cargar(self):
         """Pinta la pestaña según el modo (temas de la lista o biblioteca)."""
@@ -913,7 +931,6 @@ class PaletasPage(Gtk.Box):
         pie.add_css_class("page-footer")
         pie.append(self.etiqueta)
 
-        self.append(barra)
         self.append(scroll)
         self.append(pie)
         self.cargar()
@@ -1129,23 +1146,10 @@ class SonidoPage(Gtk.Box):
         self.ajustes = leer_sonido()
         self._listo = False
 
-        barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        barra.add_css_class("page-toolbar")
-
         self.interruptor = Gtk.Switch()
         self.interruptor.set_active(bool(self.ajustes.get("activo")))
         self.interruptor.set_valign(Gtk.Align.CENTER)
         self.interruptor.connect("notify::active", self.on_activar)
-        barra.append(self.interruptor)
-
-        etiqueta_sw = Gtk.Label(label="Sonido de teclado al escribir")
-        etiqueta_sw.set_xalign(0)
-        etiqueta_sw.add_css_class("store-title")
-        barra.append(etiqueta_sw)
-
-        relleno = Gtk.Box()
-        relleno.set_hexpand(True)
-        barra.append(relleno)
 
         self.estado = Gtk.Label(label="")
         self.estado.set_xalign(0)
@@ -1154,17 +1158,39 @@ class SonidoPage(Gtk.Box):
         pie.add_css_class("page-footer")
         pie.append(self.estado)
 
-        # ── contenido ──
-        contenido = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        contenido.set_margin_top(14)
-        contenido.set_margin_start(16)
-        contenido.set_margin_end(16)
+        # ── contenido: una tarjeta centrada, no un formulario suelto ──
+        tarjeta = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        tarjeta.add_css_class("tarjeta-ajustes")
+        tarjeta.set_size_request(640, -1)
 
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        titulo = Gtk.Label(label="Sonido al escribir")
+        titulo.set_xalign(0)
+        titulo.add_css_class("title-3")
+        titulo.set_hexpand(True)
+        head.append(titulo)
+        self.interruptor.set_tooltip_text("Encender o apagar el sonido de las teclas")
+        head.append(self.interruptor)
+        self.chip = Gtk.Label(label="Apagado")
+        self.chip.add_css_class("chip-estado")
+        head.append(self.chip)
+        tarjeta.append(head)
+
+        explicacion = Gtk.Label(
+            label="Cada tecla suena con el pack elegido. Se lee /dev/input, así que "
+                  "hace falta pertenecer al grupo «input» y se arranca al iniciar sesión."
+        )
+        explicacion.set_wrap(True)
+        explicacion.set_xalign(0)
+        explicacion.add_css_class("store-desc")
+        tarjeta.append(explicacion)
+
+        # pack
+        bloque_pack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         titulo_pack = Gtk.Label(label="Pack de sonido")
         titulo_pack.set_xalign(0)
         titulo_pack.add_css_class("heading")
-        contenido.append(titulo_pack)
-
+        bloque_pack.append(titulo_pack)
         packs = packs_sonido()
         self.combo = Gtk.DropDown.new_from_strings(packs or ["(sin packs)"])
         try:
@@ -1172,44 +1198,53 @@ class SonidoPage(Gtk.Box):
         except ValueError:
             self.combo.set_selected(0)
         self.combo.connect("notify::selected", self.on_cambiar_pack)
-        contenido.append(self.combo)
+        bloque_pack.append(self.combo)
+        tarjeta.append(bloque_pack)
 
+        # volumen
+        bloque_vol = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        fila_titulo = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         titulo_vol = Gtk.Label(label="Volumen")
         titulo_vol.set_xalign(0)
         titulo_vol.add_css_class("heading")
-        contenido.append(titulo_vol)
+        titulo_vol.set_hexpand(True)
+        fila_titulo.append(titulo_vol)
+        self.valor_vol = Gtk.Label(label="")
+        self.valor_vol.add_css_class("store-desc")
+        fila_titulo.append(self.valor_vol)
+        bloque_vol.append(fila_titulo)
 
-        fila_vol = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.escala = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 5)
         self.escala.set_value(float(self.ajustes.get("volumen", 60)))
         self.escala.set_hexpand(True)
-        self.escala.set_draw_value(True)
-        self.escala.set_value_pos(Gtk.PositionType.RIGHT)
+        self.escala.set_draw_value(False)
         self.escala.connect("value-changed", self.on_cambiar_volumen)
-        fila_vol.append(self.escala)
-        contenido.append(fila_vol)
+        bloque_vol.append(self.escala)
+        tarjeta.append(bloque_vol)
 
+        # botón de prueba
+        fila_boton = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         probar = Gtk.Button(label="Probar el sonido")
         probar.add_css_class("store-instalar")
         probar.add_css_class("suggested-action")
-        probar.set_halign(Gtk.Align.START)
         probar.connect("clicked", self.on_probar)
-        contenido.append(probar)
+        fila_boton.append(probar)
+        tarjeta.append(fila_boton)
 
-        ayuda = Gtk.Label(
-            label="El sonido se reproduce leyendo los teclados de /dev/input; hace "
-                  "falta pertenecer al grupo «input». Arranca solo al iniciar sesión."
-        )
-        ayuda.set_wrap(True)
-        ayuda.set_xalign(0)
-        ayuda.add_css_class("store-desc")
-        contenido.append(ayuda)
+        # centrar la tarjeta en la pestaña
+        centro = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        centro.set_halign(Gtk.Align.CENTER)
+        centro.set_valign(Gtk.Align.START)
+        centro.set_margin_top(28)
+        centro.set_margin_bottom(28)
+        centro.set_margin_start(16)
+        centro.set_margin_end(16)
+        centro.append(tarjeta)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
-        scroll.set_child(contenido)
+        scroll.set_child(centro)
 
-        self.append(barra)
         self.append(scroll)
         self.append(pie)
         self._listo = True
@@ -1223,10 +1258,23 @@ class SonidoPage(Gtk.Box):
 
     def actualizar_estado(self):
         activo = sonido_activo()
+        volumen = int(self.escala.get_value())
         self.estado.set_text(
-            f"Pack: {self.pack_actual()} · volumen {int(self.escala.get_value())}% · "
+            f"Pack: {self.pack_actual()} · volumen {volumen}% · "
             + ("reproduciendo" if activo else "apagado")
         )
+        # chip de la tarjeta y valor del volumen al lado del deslizador
+        try:
+            self.chip.set_text("Encendido" if activo else "Apagado")
+            self.chip.remove_css_class("chip-encendido")
+            if activo:
+                self.chip.add_css_class("chip-encendido")
+        except Exception:
+            pass
+        try:
+            self.valor_vol.set_text(f"{volumen} %")
+        except Exception:
+            pass
 
     def aplicar(self):
         self.ajustes = {
@@ -1543,6 +1591,7 @@ class TiendaPage(Gtk.Box):
         self.ventana = ventana
         self.resultados = []
         self.instalados = self._instalados()
+        self._auto_hecho = False
 
         _cargar_css(CSS_TIENDA)
 
@@ -1662,6 +1711,16 @@ class TiendaPage(Gtk.Box):
             self.flujo.remove(h)
         if not resultados:
             self.estado.set_text("Sin resultados. Prueba otra búsqueda (GitHub limita las peticiones seguidas).")
+            vacio = Gtk.Label()
+            vacio.set_markup(
+                "<span size='x-large'>Busca temas de la comunidad</span>\n\n"
+                "Escribe arriba (por ejemplo <b>catppuccin</b>, <b>hyprland dots</b> "
+                "o <b>quickshell</b>) o pulsa una categoría.\n"
+                "Las descripciones se traducen al español solas.")
+            vacio.set_justify(Gtk.Justification.CENTER)
+            vacio.add_css_class("dim-label")
+            vacio.set_margin_top(60)
+            self.flujo.append(vacio)
             return
         for r in resultados:
             self.flujo.append(self.tarjeta(r))
@@ -2005,6 +2064,15 @@ class TiendaPage(Gtk.Box):
             self.estado.set_text(resumen + " · pulsa «Aplicar tema» para probar su aspecto")
         return False
 
+    def auto_cargar(self):
+        """La primera vez que se abre la tienda, trae resultados en vez de dejarla vacía."""
+        if self._auto_hecho or self.resultados:
+            self._auto_hecho = True
+            return
+        self._auto_hecho = True
+        consulta = self.busqueda.get_text().strip() or self.CATEGORIAS[0][1]
+        self.buscar(consulta)
+
     def recargar(self):
         """Relee lo instalado y repinta los resultados que ya había."""
         self.instalados = self._instalados()
@@ -2081,7 +2149,6 @@ class ComplementosPage(Gtk.Box):
         scroll.set_vexpand(True)
         scroll.set_child(self.flujo)
 
-        self.append(barra)
         self.append(scroll)
         self.append(pie)
         self.cargar()
