@@ -67,6 +67,14 @@ hl.bind("SUPER + SHIFT + Y", hl.dsp.exec_cmd("hyprbazar"),
         { description = "HyprBazar (temas)" })
 ```
 
+## Integración con Hyprland
+
+En [`hypr/`](hypr/) están los scripts de los **botones de ventana** (minimizar
+real a un escritorio oculto, maximizar, cerrar solo esa ventana) y dos
+utilidades: `arreglar-barras.sh` (recarga hyprbars cuando desaparecen las
+barras tras un `hyprctl reload`) y `revisar-config.sh` (comprueba errores de
+configuración). Ver [hypr/README.md](hypr/README.md).
+
 ## Dónde guarda las cosas
 
 | Ruta | Contenido |
