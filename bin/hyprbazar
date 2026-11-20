@@ -317,6 +317,14 @@ class Ventana(Gtk.ApplicationWindow):
         self.pila.add_titled(self.pagina_sonido, "sonido", "Sonido")
         self.pila.connect("notify::visible-child", self.on_cambio_pagina)
 
+        # F5 / Ctrl+R: recargar la pestaña que esté abierta
+        atajo = Gtk.ShortcutController()
+        for tecla in ("F5", "<Control>r"):
+            atajo.add_shortcut(Gtk.Shortcut(
+                trigger=Gtk.ShortcutTrigger.parse_string(tecla),
+                action=Gtk.CallbackAction.new(lambda *_: (self.recargar_pestana(), True)[1])))
+        self.add_controller(atajo)
+
         self.set_child(self.pila)
 
         # abrir en otra pestaña si se pide (se hace al mapear la ventana)
@@ -341,6 +349,18 @@ class Ventana(Gtk.ApplicationWindow):
         self.cargar()
 
     # ── construcción de la lista ────────────────────────────────────────────
+    def recargar_pestana(self):
+        """Recarga lo que se esté viendo (fondos, tienda, paletas o sonido)."""
+        nombre = self.pila.get_visible_child_name()
+        if nombre == "tienda":
+            self.pagina_tienda.recargar()
+        elif nombre == "paletas":
+            self.pagina_paletas.cargar()
+            self.pagina_paletas.generar_previas()
+        elif nombre == "sonido":
+            self.pagina_sonido.actualizar_estado()
+        self.cargar()
+
     def on_cambio_pagina(self, *_):
         nombre = self.pila.get_visible_child_name()
         # los botones de fondos solo tienen sentido en su pestaña
@@ -1535,6 +1555,12 @@ class TiendaPage(Gtk.Box):
         self.busqueda.connect("activate", self.on_buscar)
         cab.append(self.busqueda)
 
+        self.btn_recargar = Gtk.Button(label="Recargar")
+        self.btn_recargar.add_css_class("flat")
+        self.btn_recargar.set_tooltip_text(
+            "Vuelve a leer lo instalado (por si acabas de descargar un repo)")
+        self.btn_recargar.connect("clicked", lambda *_: self.recargar())
+        cab.append(self.btn_recargar)
         self.btn_buscar = Gtk.Button(label="Buscar")
         self.btn_buscar.add_css_class("suggested-action")
         self.btn_buscar.connect("clicked", self.on_buscar)
@@ -1973,6 +1999,19 @@ class TiendaPage(Gtk.Box):
         self.instalados = self._instalados()
         self.ventana.pagina_paletas.cargar()
         self.ventana.pagina_paletas.generar_previas()
+        # repintar los resultados: el repo recién instalado ya puede aplicarse
+        if self.resultados:
+            self.mostrar(self.resultados)
+            self.estado.set_text(resumen + " · pulsa «Aplicar tema» para probar su aspecto")
+        return False
+
+    def recargar(self):
+        """Relee lo instalado y repinta los resultados que ya había."""
+        self.instalados = self._instalados()
+        if self.resultados:
+            self.mostrar(self.resultados)
+        else:
+            self.estado.set_text("Listo: instalados al día. Busca algo para ver más.")
         return False
 
 

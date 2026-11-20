@@ -79,6 +79,10 @@ opacidades, desenfoque y logo) y la aplica a tu escritorio.
   **«Volver a como estaba»** restaura tu aspecto anterior.
 - Lo aplicado vive en `~/.config/hypr/tema-repo.lua`, aparte de tu config.
 
+Recarga con el botón **Recargar** o con **F5**: relee los repos descargados (para
+que aparezcan al momento los que acabas de instalar), la carpeta de fondos y las
+paletas, sin cerrar la aplicación.
+
 Desde terminal:
 
 ```bash
