@@ -62,6 +62,18 @@ window, .background, .pagina { background-color: @window_bg_color; }
   padding: 18px 20px;
 }
 .fila-ajustes { padding: 6px 0; }
+.tecla {
+  background: alpha(currentColor, 0.09);
+  border-radius: 7px;
+  padding: 9px 0;
+  font-weight: 600;
+  font-size: 12px;
+}
+.tecla-pulsada {
+  background: @accent_bg_color;
+  color: @accent_fg_color;
+}
+.teclado-visual { padding: 4px 0 0 0; }
 .chip-estado {
   border-radius: 999px;
   padding: 2px 12px;
@@ -932,6 +944,7 @@ class PaletasPage(Gtk.Box):
         pie.append(self.etiqueta)
 
         self.append(scroll)
+
         self.append(pie)
         self.cargar()
 
@@ -1137,6 +1150,153 @@ def sonido_activo():
     return False
 
 
+class TecladoVisual(Gtk.Box):
+    """Teclado en pantalla que se ilumina con las teclas que vas pulsando."""
+
+    FILAS = (
+        ("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
+        ("Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"),
+        ("A", "S", "D", "F", "G", "H", "J", "K", "L", "Ñ"),
+        ("Z", "X", "C", "V", "B", "N", "M", ",", ".", "-"),
+        ("Espacio",),
+    )
+
+    def __init__(self):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.add_css_class("teclado-visual")
+        self.teclas = {}
+        for fila in self.FILAS:
+            linea = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            linea.set_halign(Gtk.Align.CENTER)
+            for etiqueta in fila:
+                tecla = Gtk.Label(label=etiqueta)
+                tecla.add_css_class("tecla")
+                if etiqueta == "Espacio":
+                    tecla.set_size_request(320, -1)
+                else:
+                    tecla.set_size_request(52, -1)
+                linea.append(tecla)
+                self.teclas[etiqueta] = tecla
+            self.append(linea)
+
+    def iluminar(self, etiqueta):
+        tecla = self.teclas.get(etiqueta)
+        if tecla is None:
+            return False
+        tecla.add_css_class("tecla-pulsada")
+
+        def apagar():
+            tecla.remove_css_class("tecla-pulsada")
+            return False
+
+        GLib.timeout_add(160, apagar)
+        return False
+
+
+class HiloTeclas(threading.Thread):
+    """Lee los teclados de /dev/input y llama a `callback` con la tecla pulsada.
+
+    No reproduce nada: solo sirve para iluminar el teclado de la pestaña Sonido.
+    Se ignoran los dispositivos virtuales (ydotool/uinput), igual que hace
+    «teclado-sonido», para que el agente no haga saltar las teclas.
+    """
+
+    NOMBRES = {
+        "KEY_SPACE": "Espacio", "KEY_ENTER": "Espacio", "KEY_KPENTER": "Espacio",
+        "KEY_BACKSPACE": "BackSpace", "KEY_MINUS": "-", "KEY_COMMA": ",",
+        "KEY_DOT": ".", "KEY_SEMICOLON": ";", "KEY_APOSTROPHE": "'",
+        "KEY_SLASH": "/", "KEY_LEFTBRACE": "[", "KEY_RIGHTBRACE": "]",
+        "KEY_EQUAL": "=", "KEY_GRAVE": "`", "KEY_BACKSLASH": "\\",
+        "KEY_SEMICOLON": ";", "KEY_LEFTCTRL": "", "KEY_LEFTSHIFT": "",
+        "KEY_TAB": "", "KEY_ESC": "",
+    }
+
+    def __init__(self, callback):
+        super().__init__(daemon=True)
+        self.callback = callback
+        self.vivo = True
+
+    def run(self):
+        try:
+            import evdev
+            from evdev import ecodes
+        except Exception:
+            return
+        dispositivos = []
+        for ruta in evdev.list_devices():
+            try:
+                aparato = evdev.InputDevice(ruta)
+            except Exception:
+                continue
+            teclas = aparato.capabilities().get(ecodes.EV_KEY, [])
+            nombre = (aparato.name or "").lower()
+            if not (ecodes.KEY_A in teclas and ecodes.KEY_Z in teclas):
+                continue
+            if any(x in nombre for x in ("ydotool", "virtual", "uinput")):
+                continue
+            if aparato.info.vendor == 0x2333:
+                continue
+            dispositivos.append(aparato)
+        if not dispositivos:
+            return
+        import selectors
+        sel = selectors.DefaultSelector()
+        for aparato in dispositivos:
+            sel.register(aparato, selectors.EVENT_READ)
+        try:
+            while self.vivo:
+                for clave, _ in sel.select(timeout=0.5):
+                    try:
+                        for evento in clave.fileobj.read():
+                            if evento.type != ecodes.EV_KEY or evento.value != 1:
+                                continue
+                            nombre = ecodes.KEY.get(evento.code)
+                            if not nombre or not nombre.startswith("KEY_"):
+                                continue
+                            if nombre in self.NOMBRES:
+                                etiqueta = self.NOMBRES[nombre]
+                            else:
+                                sufijo = nombre[4:]
+                                etiqueta = sufijo if len(sufijo) == 1 else ""
+                            if etiqueta:
+                                GLib.idle_add(self.callback, etiqueta)
+                    except OSError:
+                        try:
+                            sel.unregister(clave.fileobj)
+                        except Exception:
+                            pass
+        finally:
+            for aparato in dispositivos:
+                try:
+                    aparato.close()
+                except Exception:
+                    pass
+
+    def parar(self):
+        self.vivo = False
+
+
+DESCRIPCION_PACK = {
+    "blue": ("Azul (clicky)", "#3b82f6", "sonido agudo y con clic, como un teclado mecánico clásico"),
+    "red": ("Rojo (lineal)", "#ef4444", "pulsación suave y sin clic, la más silenciosa"),
+    "brown": ("Marrón (táctil)", "#a16207", "un pequeño tope al pulsar, sin clic"),
+    "black": ("Negro (lineal duro)", "#3f3f46", "más fuerza al pulsar, sonido más grave"),
+    "travel": ("De viaje", "#0ea5e9", "portátil: teclas bajas y sonido apagado"),
+    "mxblue": ("Azul (clicky)", "#3b82f6", "sonido agudo y con clic"),
+    "mxred": ("Rojo (lineal)", "#ef4444", "pulsación suave y sin clic"),
+    "mxbrown": ("Marrón (táctil)", "#a16207", "con tope táctil"),
+}
+
+
+def describir_pack(nombre):
+    """Devuelve (título, color, descripción) a partir del nombre del pack."""
+    bajo = nombre.lower().replace("-", " ").replace("_", " ")
+    for clave, datos in DESCRIPCION_PACK.items():
+        if clave in bajo:
+            return datos
+    return (nombre, "#64748b", "pack de sonido de la comunidad")
+
+
 class SonidoPage(Gtk.Box):
     """Sonido de teclado al escribir: pack, volumen y encendido."""
 
@@ -1199,6 +1359,20 @@ class SonidoPage(Gtk.Box):
             self.combo.set_selected(0)
         self.combo.connect("notify::selected", self.on_cambiar_pack)
         bloque_pack.append(self.combo)
+
+        # ficha visual: qué teclas estás usando (color y tacto)
+        ficha = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.punto_pack = Gtk.Label()
+        self.punto_pack.set_size_request(18, 18)
+        self.punto_pack.set_valign(Gtk.Align.CENTER)
+        ficha.append(self.punto_pack)
+        self.texto_pack = Gtk.Label()
+        self.texto_pack.set_xalign(0)
+        self.texto_pack.set_wrap(True)
+        self.texto_pack.add_css_class("store-desc")
+        ficha.append(self.texto_pack)
+        bloque_pack.append(ficha)
+        self.actualizar_ficha_pack()
         tarjeta.append(bloque_pack)
 
         # volumen
@@ -1221,6 +1395,23 @@ class SonidoPage(Gtk.Box):
         self.escala.connect("value-changed", self.on_cambiar_volumen)
         bloque_vol.append(self.escala)
         tarjeta.append(bloque_vol)
+
+        # teclado en pantalla: se ilumina con lo que escribes
+        bloque_teclado = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        etiqueta_teclado = Gtk.Label(label="Tus teclas")
+        etiqueta_teclado.set_xalign(0)
+        etiqueta_teclado.add_css_class("heading")
+        bloque_teclado.append(etiqueta_teclado)
+        self.teclado = TecladoVisual()
+        bloque_teclado.append(self.teclado)
+        pista = Gtk.Label(
+            label="Se ilumina la tecla que pulsas, para comprobar que se está leyendo "
+                  "el teclado correcto.")
+        pista.set_wrap(True)
+        pista.set_xalign(0)
+        pista.add_css_class("store-desc")
+        bloque_teclado.append(pista)
+        tarjeta.append(bloque_teclado)
 
         # botón de prueba
         fila_boton = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -1246,15 +1437,49 @@ class SonidoPage(Gtk.Box):
         scroll.set_child(centro)
 
         self.append(scroll)
+
+        self._hilo_teclas = None
+        self.connect("map", self._arrancar_teclas)
+        self.connect("unmap", self._parar_teclas)
         self.append(pie)
         self._listo = True
         self.actualizar_estado()
 
     # ── helpers ─────────────────────────────────────────────────────────────
+    def actualizar_ficha_pack(self):
+        nombre = self.pack_actual()
+        titulo, color, descripcion = describir_pack(nombre)
+        self.punto_pack.set_markup(
+            f"<span foreground='{color}' size='x-large'>●</span>")
+        self.texto_pack.set_text(f"{titulo}: {descripcion}")
+
     def pack_actual(self):
         packs = packs_sonido()
         i = self.combo.get_selected()
         return packs[i] if 0 <= i < len(packs) else self.ajustes.get("pack", "")
+
+    def _arrancar_teclas(self, *_):
+        if self._hilo_teclas is None or not self._hilo_teclas.is_alive():
+            self._hilo_teclas = HiloTeclas(self.teclado.iluminar)
+            self._hilo_teclas.start()
+        # si el interruptor está encendido pero el proceso no vive (tras un
+        # reinicio de la app, por ejemplo), se vuelve a arrancar solo
+        self._asegurar_daemon()
+        return False
+
+    def _asegurar_daemon(self):
+        try:
+            if self.interruptor.get_active() and not sonido_activo():
+                arrancar_sonido()
+                self.estado.set_text("Arrancando el sonido de teclado…")
+        except Exception:
+            pass
+
+    def _parar_teclas(self, *_):
+        if self._hilo_teclas is not None:
+            self._hilo_teclas.parar()
+            self._hilo_teclas = None
+        return False
 
     def actualizar_estado(self):
         activo = sonido_activo()
@@ -1297,6 +1522,7 @@ class SonidoPage(Gtk.Box):
     def on_cambiar_pack(self, *_):
         if not self._listo:
             return
+        self.actualizar_ficha_pack()
         self.aplicar()
 
     def on_cambiar_volumen(self, *_):
@@ -1654,6 +1880,7 @@ class TiendaPage(Gtk.Box):
         self.append(cab)
         self.append(chips)
         self.append(scroll)
+
         self.append(pie)
 
     # ── estado interno ──────────────────────────────────────────────────────
@@ -2150,6 +2377,7 @@ class ComplementosPage(Gtk.Box):
         scroll.set_child(self.flujo)
 
         self.append(scroll)
+
         self.append(pie)
         self.cargar()
 
