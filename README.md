@@ -92,6 +92,16 @@ hyprbazar-tema aplicar owner-repo
 hyprbazar-tema restaurar
 ```
 
+## Sonido: galería de teclas
+
+En la pestaña **Sonido** cada pack aparece como una **imagen de su tecla**
+(cuerpo, color del interruptor y material: ABS/PBT) con su botón **Aplicar**,
+en vez de una lista desplegable. La imagen se genera la primera vez con
+ImageMagick y queda en `~/.local/share/hyprbazar/teclas/`.
+
+Además la pestaña trae un **teclado en pantalla** que se ilumina con las teclas
+que pulsas, para comprobar que se lee el teclado correcto.
+
 ## Integración con Hyprland
 
 En [`hypr/`](hypr/) están los scripts de los **botones de ventana** (minimizar

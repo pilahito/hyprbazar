@@ -1276,6 +1276,45 @@ class HiloTeclas(threading.Thread):
         self.vivo = False
 
 
+DIR_TECLAS = Path.home() / ".local" / "share" / "hyprbazar" / "teclas"
+
+
+def imagen_pack(nombre):
+    """Imagen de la tecla del pack (la genera la primera vez). Devuelve ruta o None."""
+    if not nombre:
+        return None
+    DIR_TECLAS.mkdir(parents=True, exist_ok=True)
+    destino = DIR_TECLAS / f"{nombre}.png"
+    if destino.exists():
+        return destino
+    magick = shutil.which("magick") or shutil.which("convert")
+    if not magick:
+        return None
+    titulo, color, _ = describir_pack(nombre)
+    # tonos para el cuerpo y la cara de la tecla a partir del color del interruptor
+    cuerpo, cara = "#14181f", color
+    partes = nombre.lower().split("-")
+    material = "PBT" if "pbt" in nombre.lower() else ("ABS" if "abs" in nombre.lower() else "")
+    subtitulo = " · ".join(x for x in (titulo.split(" (")[0], material) if x)
+    orden = [
+        magick, "-size", "360x200", "xc:#0b0e13",
+        "-fill", "#1a1f27", "-draw", "roundrectangle 60,96 300,178 18,18",
+        "-fill", cuerpo, "-draw", "roundrectangle 60,74 300,166 18,18",
+        "-fill", cara, "-draw", "roundrectangle 68,82 292,158 14,14",
+        "-fill", "#ffffff22", "-draw", "polygon 68,82 292,82 292,120 68,120",
+        "-gravity", "center", "-pointsize", "28", "-fill", "#0b1220",
+        "-annotate", "+0-26", titulo.split(" (")[0].upper()[:14],
+        "-pointsize", "15", "-fill", "#0b1220cc",
+        "-annotate", "+0+14", subtitulo[:24],
+        str(destino),
+    ]
+    try:
+        subprocess.run(orden, capture_output=True, timeout=60)
+    except Exception:
+        return None
+    return destino if destino.exists() else None
+
+
 DESCRIPCION_PACK = {
     "blue": ("Azul (clicky)", "#3b82f6", "sonido agudo y con clic, como un teclado mecánico clásico"),
     "red": ("Rojo (lineal)", "#ef4444", "pulsación suave y sin clic, la más silenciosa"),
@@ -1351,14 +1390,16 @@ class SonidoPage(Gtk.Box):
         titulo_pack.set_xalign(0)
         titulo_pack.add_css_class("heading")
         bloque_pack.append(titulo_pack)
-        packs = packs_sonido()
-        self.combo = Gtk.DropDown.new_from_strings(packs or ["(sin packs)"])
-        try:
-            self.combo.set_selected(packs.index(self.ajustes.get("pack", "")))
-        except ValueError:
-            self.combo.set_selected(0)
-        self.combo.connect("notify::selected", self.on_cambiar_pack)
-        bloque_pack.append(self.combo)
+        self.pack_sel = self.ajustes.get("pack", "")
+        self.galeria_packs = Gtk.FlowBox()
+        self.galeria_packs.set_homogeneous(True)
+        self.galeria_packs.set_max_children_per_line(3)
+        self.galeria_packs.set_min_children_per_line(2)
+        self.galeria_packs.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.galeria_packs.set_row_spacing(8)
+        self.galeria_packs.set_column_spacing(8)
+        bloque_pack.append(self.galeria_packs)
+        self.rellenar_galeria()
 
         # ficha visual: qué teclas estás usando (color y tacto)
         ficha = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -1454,9 +1495,60 @@ class SonidoPage(Gtk.Box):
         self.texto_pack.set_text(f"{titulo}: {descripcion}")
 
     def pack_actual(self):
-        packs = packs_sonido()
-        i = self.combo.get_selected()
-        return packs[i] if 0 <= i < len(packs) else self.ajustes.get("pack", "")
+        return self.pack_sel or self.ajustes.get("pack", "")
+
+    def rellenar_galeria(self):
+        """Una tarjeta por pack, con su imagen de tecla y su botón Aplicar."""
+        while (hijo := self.galeria_packs.get_first_child()) is not None:
+            self.galeria_packs.remove(hijo)
+        for pack in packs_sonido():
+            tarjeta = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            tarjeta.add_css_class("store-card")
+
+            imagen = Gtk.Picture.new_for_paintable(None)
+            ruta = imagen_pack(pack)
+            if ruta:
+                try:
+                    imagen.set_paintable(Gdk.Texture.new_from_filename(str(ruta)))
+                except Exception:
+                    pass
+            imagen.set_content_fit(Gtk.ContentFit.COVER)
+            imagen.set_size_request(180, 100)
+            marco = Gtk.Frame()
+            marco.add_css_class("store-banner")
+            marco.set_child(imagen)
+            marco.set_overflow(Gtk.Overflow.HIDDEN)
+            tarjeta.append(marco)
+
+            fila = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            nombre = Gtk.Label(label=pack.replace("-", " "))
+            nombre.set_xalign(0)
+            nombre.set_ellipsize(3)
+            nombre.set_hexpand(True)
+            nombre.add_css_class("store-title")
+            fila.append(nombre)
+            if pack == self.pack_actual():
+                chip = Gtk.Label(label="En uso")
+                chip.add_css_class("store-badge")
+                chip.add_css_class("store-badge-ok")
+                fila.append(chip)
+            tarjeta.append(fila)
+
+            boton = Gtk.Button(label="Aplicar" if pack != self.pack_actual() else "Aplicar otra vez")
+            boton.add_css_class("store-instalar")
+            boton.add_css_class("suggested-action")
+            boton.connect("clicked", lambda *_, p=pack: self.elegir_pack(p))
+            tarjeta.append(boton)
+            self.galeria_packs.append(tarjeta)
+
+    def elegir_pack(self, pack):
+        if self.pack_sel == pack:
+            self.aplicar()
+            return
+        self.pack_sel = pack
+        self.actualizar_ficha_pack()
+        self.rellenar_galeria()
+        self.aplicar()
 
     def _arrancar_teclas(self, *_):
         if self._hilo_teclas is None or not self._hilo_teclas.is_alive():
@@ -1517,12 +1609,6 @@ class SonidoPage(Gtk.Box):
     def on_activar(self, *_):
         if not self._listo:
             return
-        self.aplicar()
-
-    def on_cambiar_pack(self, *_):
-        if not self._listo:
-            return
-        self.actualizar_ficha_pack()
         self.aplicar()
 
     def on_cambiar_volumen(self, *_):
