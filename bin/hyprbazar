@@ -41,6 +41,7 @@ THUMB_W, THUMB_H = 400, 225
 ICONO_POR_DEFECTO = "Papirus-Dark"
 CACHE_TRAD = CACHE / "traducciones.json"
 CACHE_PALETAS = Path.home() / ".cache" / "temas-paletas"
+DATOS_TIENDA = Path.home() / ".local" / "share" / "tienda"
 PALETAS_DIR = Path.home() / ".local" / "share" / "temas-paletas"
 def _local_bin(nombre, alternativo):
     """Busca el ejecutable con el nombre nuevo y, si no, con el antiguo."""
@@ -364,6 +365,10 @@ class Ventana(Gtk.ApplicationWindow):
                 self.pila.set_visible_child_name("sonido")
             if os.environ.get("TEMAS_COMPLEMENTOS") == "1":
                 self.pila.set_visible_child_name("complementos")
+            if os.environ.get("TEMAS_INSTALADOS") == "1":
+                self.pila.set_visible_child_name("tienda")
+                self.pagina_tienda.busqueda.set_text("")
+                self.pagina_tienda.buscar("")
             if os.environ.get("TEMAS_TIENDA") == "1":
                 self.pila.set_visible_child_name("tienda")
                 consulta = os.environ.get("TEMAS_BUSCAR", "").strip()
@@ -2071,6 +2076,9 @@ class TiendaPage(Gtk.Box):
     def mostrar(self, resultados):
         self.resultados = resultados
         self.btn_buscar.set_sensitive(True)
+        # las búsquedas van en rejilla normal (si venimos de "Instalados", que
+        # usa tarjetas de varios tamaños, se restaura)
+        self.flujo.set_homogeneous(True)
         self.instalados = self._instalados()
         while (h := self.flujo.get_first_child()) is not None:
             self.flujo.remove(h)
@@ -2295,10 +2303,92 @@ class TiendaPage(Gtk.Box):
         threading.Thread(target=trabajo, daemon=True).start()
         return marco
 
+    def _cabecera_seccion(self, titulo, detalle):
+        caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        caja.set_size_request(700, -1)
+        caja.set_margin_top(10)
+        caja.set_margin_bottom(2)
+        etiqueta = Gtk.Label(label=titulo)
+        etiqueta.set_xalign(0)
+        etiqueta.add_css_class("title-3")
+        caja.append(etiqueta)
+        sub = Gtk.Label(label=detalle)
+        sub.set_xalign(0)
+        sub.add_css_class("store-desc")
+        caja.append(sub)
+        return caja
+
+    def _tarjeta_repo(self, repo):
+        caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        caja.add_css_class("store-card")
+        caja.set_size_request(320, -1)
+
+        titulo = Gtk.Label(label=repo)
+        titulo.set_xalign(0)
+        titulo.set_ellipsize(3)
+        titulo.add_css_class("store-title")
+        caja.append(titulo)
+
+        slug = self._slug(repo)
+        aplicado = self._tema_aplicado() == slug
+        if aplicado:
+            chip = Gtk.Label(label="Aplicado")
+            chip.add_css_class("store-badge")
+            chip.add_css_class("store-badge-ok")
+            caja.append(chip)
+
+        botones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        aplicar = Gtk.Button(label="Aplicar tema")
+        aplicar.add_css_class("store-instalar")
+        aplicar.add_css_class("suggested-action")
+        aplicar.connect("clicked", lambda *_, r=repo, b=aplicar: self.aplicar_tema(r, b))
+        botones.append(aplicar)
+        carpeta = Gtk.Button(label="Carpeta")
+        carpeta.add_css_class("flat")
+        carpeta.connect("clicked", lambda *_, r=repo: abrir_carpeta(str(DATOS_TIENDA / slug)))
+        botones.append(carpeta)
+        caja.append(botones)
+        return caja
+
+    def _tarjeta_fondo_descargado(self, ruta):
+        caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        caja.add_css_class("store-card")
+        caja.set_size_request(240, -1)
+
+        imagen = Gtk.Picture.new_for_paintable(None)
+        thumb = miniatura(str(ruta))
+        if thumb:
+            try:
+                imagen.set_paintable(Gdk.Texture.new_from_filename(str(thumb)))
+            except Exception:
+                pass
+        imagen.set_content_fit(Gtk.ContentFit.COVER)
+        imagen.set_size_request(220, 120)
+        marco = Gtk.Frame()
+        marco.add_css_class("store-banner")
+        marco.set_child(imagen)
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
+        caja.append(marco)
+
+        titulo = Gtk.Label(label=ruta.stem.replace("_", " ")[:34])
+        titulo.set_xalign(0)
+        titulo.set_ellipsize(3)
+        titulo.add_css_class("store-title")
+        caja.append(titulo)
+
+        aplicar = Gtk.Button(label="Poner de fondo")
+        aplicar.add_css_class("store-instalar")
+        aplicar.add_css_class("suggested-action")
+        aplicar.connect("clicked", lambda *_, r=str(ruta): self.aplicar_fondo(r))
+        caja.append(aplicar)
+        return caja
+
     def mostrar_instalados(self):
-        """Muestra las paletas que ya están descargadas, listas para aplicar."""
+        """Todo lo descargado (paletas, repos y fondos), con su botón de aplicar."""
         while (h := self.flujo.get_first_child()) is not None:
             self.flujo.remove(h)
+        # tarjetas de distinto tamaño (las cabeceras de sección ocupan una fila)
+        self.flujo.set_homogeneous(False)
 
         paletas = []
         if PALETAS_DIR.is_dir():
@@ -2375,7 +2465,36 @@ class TiendaPage(Gtk.Box):
             caja.append(acciones)
             self.flujo.append(caja)
 
-        self.estado.set_text(f"{len(paletas)} temas descargados · pulsa Aplicar para cambiar")
+        # ── repos de la tienda ──
+        repos = []
+        try:
+            r = subprocess.run([str(TIENDA), "instalados"], capture_output=True,
+                               text=True, timeout=15)
+            repos = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+        except Exception:
+            repos = []
+        if repos:
+            self.flujo.append(self._cabecera_seccion(
+                "Repos descargados",
+                "Aplican su aspecto visual (colores, huecos, bordes y esquinas)"))
+            for repo in repos:
+                self.flujo.append(self._tarjeta_repo(repo))
+
+        # ── fondos descargados ──
+        fondos = []
+        for carpeta in (Path.home() / "Imágenes" / "Wallpapers" / "Comunidad", DESCARGAS):
+            if carpeta.is_dir():
+                fondos += sorted(f for f in carpeta.rglob("*")
+                                 if f.is_file() and f.suffix.lower() in EXTENSIONES)
+        if fondos:
+            self.flujo.append(self._cabecera_seccion(
+                "Fondos descargados", "Pulsa uno para ponerlo de fondo"))
+            for ruta in fondos[:48]:
+                self.flujo.append(self._tarjeta_fondo_descargado(ruta))
+
+        self.estado.set_text(
+            f"{len(paletas)} paletas · {len(repos)} repos · {len(fondos)} fondos descargados"
+            " · cada uno con su botón de aplicar")
 
     def aplicar_paleta(self, ident, nombre):
         self.estado.set_text(f"Aplicando {nombre}…")
