@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""hyprbazar-teclas — baja fotos reales de los interruptores para la tienda de sonido.
+
+La pestaña Sonido de HyprBazar enseña una imagen por pack. Si no hay foto, se
+dibuja una tecla. Este programa baja fotos **reales** (Cherry MX azul, rojo,
+marrón…) de Wikimedia Commons, que son de licencia libre, y las guarda para que
+la app las use en su lugar.
+
+Uso:
+    hyprbazar-teclas descargar     baja las fotos que falten
+    hyprbazar-teclas listar        qué fotos hay ya
+    hyprbazar-teclas creditos      autores y licencias de lo descargado
+"""
+import json
+import sys
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+CACHE = Path.home() / ".local" / "share" / "hyprbazar" / "teclas" / "reales"
+CREDITOS = CACHE / "creditos.json"
+UA = "HyprBazar/1.0 (https://github.com/pilahito/hyprbazar)"
+
+# tipo -> búsqueda en Wikimedia Commons
+BUSQUEDAS = {
+    "blue": "Cherry MX blue switch",
+    "red": "Cherry MX red switch",
+    "brown": "Cherry MX brown switch",
+    "black": "Cherry MX black switch",
+    "silver": "Cherry MX speed silver switch",
+    "green": "Cherry MX green switch",
+    "turquoise": "Cherry MX turquoise switch",
+    "purple": "Cherry MX purple switch",
+    "white": "Cherry MX white switch",
+}
+LICENCIAS_OK = ("cc0", "cc by", "cc-by", "public domain", "pd", "cc by-sa", "cc-by-sa")
+
+
+def tipos_de_pack(nombre):
+    """Saca los tipos de interruptor que aparecen en el nombre de un pack."""
+    bajo = nombre.lower()
+    encontrados = []
+    for tipo in BUSQUEDAS:
+        if tipo in bajo:
+            encontrados.append(tipo)
+    if "travel" in bajo and not encontrados:
+        encontrados.append("travel")
+    return encontrados
+
+
+def api(url):
+    peticion = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(peticion, timeout=25) as r:
+        return json.loads(r.read().decode())
+
+
+def buscar_imagen(termino):
+    """Devuelve (url_thumb, autor, licencia, página) de la mejor foto libre."""
+    url = ("https://commons.wikimedia.org/w/api.php?action=query&format=json"
+           "&generator=search&gsrsearch=" + urllib.parse.quote("file:" + termino) +
+           "&gsrnamespace=6&gsrlimit=8&prop=imageinfo"
+           "&iiprop=url|extmetadata&iiurlwidth=640")
+    datos = api(url)
+    mejor = None
+    for pagina in (datos.get("query", {}).get("pages") or {}).values():
+        info = (pagina.get("imageinfo") or [{}])[0]
+        meta = info.get("extmetadata") or {}
+        licencia = ((meta.get("LicenseShortName") or {}).get("value") or "").strip()
+        thumb = info.get("thumburl") or ""
+        if not thumb:
+            continue
+        autor = (meta.get("Artist") or {}).get("value") or "desconocido"
+        # el autor viene con HTML: se limpia para guardarlo legible
+        limpio = urllib.parse.unquote(autor)
+        for etiqueta in ("<a", "</a>", "<span", "</span>", "<i>", "</i>"):
+            limpio = limpio.replace(etiqueta, " ")
+        limpio = " ".join(limpio.split())
+        pagina_wiki = info.get("descriptionurl") or ""
+        if any(l in licencia.lower() for l in LICENCIAS_OK) or not licencia:
+            mejor = (thumb, limpio[:80], licencia or "sin indicar", pagina_wiki)
+            if licencia.lower().startswith(("cc0", "public")):
+                break
+    return mejor
+
+
+def descargar():
+    CACHE.mkdir(parents=True, exist_ok=True)
+    creditos = {}
+    if CREDITOS.exists():
+        try:
+            creditos = json.loads(CREDITOS.read_text(encoding="utf-8"))
+        except Exception:
+            creditos = {}
+
+    # qué tipos hacen falta según los packs instalados
+    audio = Path.home() / ".local" / "share" / "mechsim" / "audio"
+    necesarios = set()
+    if audio.is_dir():
+        for pack in audio.iterdir():
+            necesarios.update(tipos_de_pack(pack.name))
+    necesarios.discard("travel")
+
+    bajadas, fallos = 0, 0
+    for tipo in sorted(necesarios):
+        destino = CACHE / f"{tipo}.jpg"
+        if destino.exists() and destino.stat().st_size > 5000:
+            print(f"· {tipo}: ya está")
+            continue
+        print(f"· {tipo}: buscando…", flush=True)
+        try:
+            resultado = buscar_imagen(BUSQUEDAS[tipo])
+        except Exception as error:  # noqa: BLE001
+            print(f"   no pude buscar: {error}")
+            fallos += 1
+            continue
+        if not resultado:
+            print("   sin resultados con licencia libre")
+            fallos += 1
+            continue
+        thumb, autor, licencia, pagina = resultado
+        try:
+            peticion = urllib.request.Request(thumb, headers={"User-Agent": UA})
+            with urllib.request.urlopen(peticion, timeout=30) as r:
+                datos = r.read()
+            destino.write_bytes(datos)
+        except Exception as error:  # noqa: BLE001
+            print(f"   no pude descargar: {error}")
+            fallos += 1
+            continue
+        creditos[tipo] = {"autor": autor, "licencia": licencia, "origen": pagina}
+        print(f"   descargada ({licencia})")
+        bajadas += 1
+
+    CREDITOS.write_text(json.dumps(creditos, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"\n{bajadas} descargadas · {fallos} fallos · fotos en {CACHE}")
+
+
+def listar():
+    if not CACHE.is_dir():
+        print("(no hay fotos descargadas)")
+        return
+    for f in sorted(CACHE.glob("*.jpg")):
+        print(f"{f.stem}  {f.stat().st_size // 1024} KB")
+
+
+def ver_creditos():
+    if not CREDITOS.exists():
+        print("(no hay créditos: aún no se ha descargado nada)")
+        return
+    for tipo, datos in json.loads(CREDITOS.read_text(encoding="utf-8")).items():
+        print(f"{tipo}: {datos.get('autor')} · {datos.get('licencia')}\n   {datos.get('origen')}")
+
+
+if __name__ == "__main__":
+    orden = sys.argv[1] if len(sys.argv) > 1 else "descargar"
+    if orden == "listar":
+        listar()
+    elif orden == "creditos":
+        ver_creditos()
+    else:
+        descargar()

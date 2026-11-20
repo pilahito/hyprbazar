@@ -1081,6 +1081,7 @@ CONFIG_SONIDO = Path.home() / ".config" / "hyprbazar" / "sonido.json"
 AUDIO_PACKS = Path.home() / ".local" / "share" / "mechsim" / "audio"
 JUGADOR = Path.home() / ".local" / "bin" / "teclado-sonido"
 TEMA_REPO = Path.home() / ".local" / "bin" / "hyprbazar-tema"
+TECLAS = Path.home() / ".local" / "bin" / "hyprbazar-teclas"
 
 
 def leer_sonido():
@@ -1279,10 +1280,32 @@ class HiloTeclas(threading.Thread):
 DIR_TECLAS = Path.home() / ".local" / "share" / "hyprbazar" / "teclas"
 
 
+TECLAS_REALES = DIR_TECLAS / "reales"
+TIPOS_INTERRUPTOR = ("blue", "red", "brown", "black", "silver", "green",
+                     "turquoise", "purple", "white")
+
+
+def tipo_interruptor(nombre):
+    """Tipo de interruptor del pack ('blue', 'red'…) o None."""
+    bajo = (nombre or "").lower()
+    for tipo in TIPOS_INTERRUPTOR:
+        if tipo in bajo:
+            return tipo
+    return None
+
+
 def imagen_pack(nombre):
-    """Imagen de la tecla del pack (la genera la primera vez). Devuelve ruta o None."""
+    """Imagen del pack: foto real si la hay, si no una tecla dibujada."""
     if not nombre:
         return None
+    # 1) foto real descargada con hyprbazar-teclas
+    tipo = tipo_interruptor(nombre)
+    if tipo:
+        for extension in ("jpg", "png", "jpeg", "webp"):
+            foto = TECLAS_REALES / f"{tipo}.{extension}"
+            if foto.exists() and foto.stat().st_size > 2000:
+                return foto
+    # 2) tecla dibujada (se genera la primera vez)
     DIR_TECLAS.mkdir(parents=True, exist_ok=True)
     destino = DIR_TECLAS / f"{nombre}.png"
     if destino.exists():
@@ -1398,6 +1421,15 @@ class SonidoPage(Gtk.Box):
         self.galeria_packs.set_selection_mode(Gtk.SelectionMode.NONE)
         self.galeria_packs.set_row_spacing(8)
         self.galeria_packs.set_column_spacing(8)
+        fila_img = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.btn_fotos = Gtk.Button(label="Descargar fotos reales")
+        self.btn_fotos.add_css_class("flat")
+        self.btn_fotos.set_tooltip_text(
+            "Baja fotos reales de los interruptores (Cherry MX azul, rojo, marrón…) "
+            "de Wikimedia Commons, que son de licencia libre")
+        self.btn_fotos.connect("clicked", lambda *_: self.descargar_fotos())
+        fila_img.append(self.btn_fotos)
+        bloque_pack.append(fila_img)
         bloque_pack.append(self.galeria_packs)
         self.rellenar_galeria()
 
@@ -1540,6 +1572,26 @@ class SonidoPage(Gtk.Box):
             boton.connect("clicked", lambda *_, p=pack: self.elegir_pack(p))
             tarjeta.append(boton)
             self.galeria_packs.append(tarjeta)
+
+    def descargar_fotos(self):
+        self.btn_fotos.set_sensitive(False)
+        self.btn_fotos.set_label("Descargando fotos…")
+
+        def trabajo():
+            try:
+                subprocess.run([str(TECLAS), "descargar"], capture_output=True, timeout=300)
+            except Exception:
+                pass
+            GLib.idle_add(self._fin_fotos)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _fin_fotos(self):
+        self.btn_fotos.set_sensitive(True)
+        self.btn_fotos.set_label("Descargar fotos reales")
+        self.rellenar_galeria()
+        self.estado.set_text("Fotos reales listas (licencias en hyprbazar-teclas creditos)")
+        return False
 
     def elegir_pack(self, pack):
         if self.pack_sel == pack:

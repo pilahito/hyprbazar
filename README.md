@@ -99,6 +99,11 @@ En la pestaña **Sonido** cada pack aparece como una **imagen de su tecla**
 en vez de una lista desplegable. La imagen se genera la primera vez con
 ImageMagick y queda en `~/.local/share/hyprbazar/teclas/`.
 
+Si pulsas **«Descargar fotos reales»**, la app baja fotos de los interruptores
+(Cherry MX azul, rojo, marrón, negro…) de **Wikimedia Commons**, casi todas de
+dominio público o CC0, y las usa en lugar de las teclas dibujadas. Los autores y
+licencias quedan en `hyprbazar-teclas creditos`.
+
 Además la pestaña trae un **teclado en pantalla** que se ilumina con las teclas
 que pulsas, para comprobar que se lee el teclado correcto.
 

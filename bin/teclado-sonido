@@ -147,7 +147,7 @@ def teclados():
 # caché. A partir de ahí se reproducen trozos de ~100 ms.
 
 CACHE_TROZOS = Path.home() / ".cache" / "teclado-sonido"
-TROZO_MAX = 0.25          # segundos como mucho por golpe
+TROZO_MAX = 0.30          # segundos como mucho por golpe
 TROZOS_MAXIMOS = 48       # cuántos golpes distintos guardamos por pack
 
 
@@ -191,7 +191,9 @@ def golpes_de(fichero):
         siguiente = inicios[pos + 1] if pos + 1 < len(inicios) else fin + 0.3
         largo = siguiente - fin
         if 0.02 <= largo <= TROZO_MAX:
-            golpes.append((fin, min(largo, TROZO_MAX)))
+            # se empieza un pelín antes para no cortar el ataque de la tecla
+            inicio = max(0.0, fin - 0.015)
+            golpes.append((inicio, min(largo + 0.03, TROZO_MAX + 0.05)))
         if len(golpes) >= TROZOS_MAXIMOS:
             break
     return golpes
@@ -217,10 +219,14 @@ def trozos_de_pack(nombre, carpeta, sonidos):
                 continue
             try:
                 subprocess.run(
+                    # normalización: los trozos venían a -26 dB de media y con
+                    # el volumen al 30 % no se oían. Se suben a ~-16 LUFS.
                     ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                      "-ss", f"{inicio:.3f}", "-t", f"{largo:.3f}",
-                     "-i", str(fichero), "-c:a", "libvorbis", "-q:a", "4",
-                     str(salida)],
+                     "-i", str(fichero), "-af",
+                     "loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=out:st="
+                     f"{max(0.0, largo - 0.02):.3f}:d=0.02",
+                     "-c:a", "libvorbis", "-q:a", "4", str(salida)],
                     capture_output=True, timeout=30)
             except Exception:
                 continue
