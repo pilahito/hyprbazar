@@ -92,14 +92,18 @@ def cargar_pack(nombre):
     sonidos = [s for s in sonidos if s.exists()]
     if not sonidos:
         raise SystemExit(f"El pack '{nombre}' no tiene sonidos utilizables.")
-    return sonidos
+    return trozos_de_pack(nombre, carpeta, sonidos)
 
 
 def reproductor():
-    for cmd in ("pw-play", "paplay", "ffplay"):
+    """Programa para reproducir. paplay primero: es ligero y sí acepta volumen.
+
+    (pw-play NO tiene opción --volume: si se le pasa, falla y no suena nada.)
+    """
+    for cmd in ("paplay", "ffplay", "pw-play"):
         if shutil.which(cmd):
             return cmd
-    raise SystemExit("No encuentro pw-play, paplay ni ffplay para reproducir.")
+    raise SystemExit("No encuentro paplay, ffplay ni pw-play para reproducir.")
 
 
 # Dispositivos que NO deben sonar: los crea software de automatización
@@ -131,6 +135,101 @@ def teclados():
                 continue          # teclado simulado: no suena
             aparatos.append(aparato)
     return aparatos
+
+
+
+# ── Trocear packs de un solo fichero largo ─────────────────────
+#
+# Muchos packs de MechSim traen un único son.ogg de ~54 s que en realidad es
+# una grabación de tecleo: varios golpes separados por silencio. Reproducir ese
+# fichero entero en cada tecla es un desastre, así que la primera vez lo
+# partimos en golpes cortos (silencios + corte con ffmpeg) y los guardamos en
+# caché. A partir de ahí se reproducen trozos de ~100 ms.
+
+CACHE_TROZOS = Path.home() / ".cache" / "teclado-sonido"
+TROZO_MAX = 0.25          # segundos como mucho por golpe
+TROZOS_MAXIMOS = 48       # cuántos golpes distintos guardamos por pack
+
+
+def duracion(fichero):
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                            "format=duration", "-of", "csv=p=0", str(fichero)],
+                           capture_output=True, text=True, timeout=20)
+        return float(r.stdout.strip())
+    except Exception:
+        return 0.0
+
+
+def golpes_de(fichero):
+    """Devuelve [(inicio, duración)] de cada golpe detectado en la grabación."""
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", str(fichero), "-af",
+             "silencedetect=noise=-35dB:d=0.02", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=90)
+    except Exception:
+        return []
+    texto = r.stderr
+    inicios, finales = [], []
+    for linea in texto.splitlines():
+        if "silence_start:" in linea:
+            try:
+                inicios.append(float(linea.split("silence_start:")[1].split()[0]))
+            except Exception:
+                pass
+        elif "silence_end:" in linea:
+            try:
+                finales.append(float(linea.split("silence_end:")[1].split()[0]))
+            except Exception:
+                pass
+    # los tramos con sonido están entre el final de un silencio y el siguiente
+    golpes = []
+    if not inicios:
+        return []
+    for pos, fin in enumerate(finales):
+        siguiente = inicios[pos + 1] if pos + 1 < len(inicios) else fin + 0.3
+        largo = siguiente - fin
+        if 0.02 <= largo <= TROZO_MAX:
+            golpes.append((fin, min(largo, TROZO_MAX)))
+        if len(golpes) >= TROZOS_MAXIMOS:
+            break
+    return golpes
+
+
+def trozos_de_pack(nombre, carpeta, sonidos):
+    """Si el pack es un único fichero largo, lo parte y devuelve los trozos."""
+    largos = [s for s in sonidos if duracion(s) > 1.5]
+    cortos = [s for s in sonidos if s not in largos]
+    if not largos:
+        return sonidos
+
+    destino = CACHE_TROZOS / nombre
+    destino.mkdir(parents=True, exist_ok=True)
+    existentes = sorted(destino.glob("*.ogg"))
+    if len(existentes) >= 5:
+        return cortos + existentes
+
+    for fichero in largos:
+        for i, (inicio, largo) in enumerate(golpes_de(fichero)):
+            salida = destino / f"{i:02d}.ogg"
+            if salida.exists():
+                continue
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                     "-ss", f"{inicio:.3f}", "-t", f"{largo:.3f}",
+                     "-i", str(fichero), "-c:a", "libvorbis", "-q:a", "4",
+                     str(salida)],
+                    capture_output=True, timeout=30)
+            except Exception:
+                continue
+
+    trozos = sorted(destino.glob("*.ogg"))
+    if trozos:
+        print(f"teclado-sonido: pack '{nombre}' troceado en {len(trozos)} golpes "
+              f"(la primera vez tarda unos segundos)", flush=True)
+    return cortos + trozos
 
 
 def main():
@@ -192,10 +291,17 @@ def main():
                             continue
                         ultimo = ahora
                         archivo = random.choice(sonidos)
-                        orden = [programa, "--volume", str(volumen), str(archivo)]
-                        if programa == "ffplay":
+                        # Cada reproductor usa su propia forma de poner el volumen:
+                        #   paplay  0..65536 (0 % .. 100 %)
+                        #   ffplay  -volume 0..100
+                        #   pw-play no admite volumen (se toca el del sink)
+                        if programa == "paplay":
+                            orden = [programa, f"--volume={int(volumen * 655.36)}", str(archivo)]
+                        elif programa == "ffplay":
                             orden = [programa, "-nodisp", "-autoexit", "-loglevel",
                                      "quiet", "-volume", str(volumen), str(archivo)]
+                        else:
+                            orden = [programa, str(archivo)]
                         subprocess.Popen(orden, stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL,
                                          start_new_session=True)

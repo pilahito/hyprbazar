@@ -13,6 +13,7 @@ en el equipo (magick/ffmpeg para las miniaturas).
 import hashlib
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,7 @@ THUMB_W, THUMB_H = 400, 225
 ICONO_POR_DEFECTO = "Papirus-Dark"
 CACHE_TRAD = CACHE / "traducciones.json"
 CACHE_PALETAS = Path.home() / ".cache" / "temas-paletas"
+PALETAS_DIR = Path.home() / ".local" / "share" / "temas-paletas"
 def _local_bin(nombre, alternativo):
     """Busca el ejecutable con el nombre nuevo y, si no, con el antiguo."""
     for candidato in (shutil.which(nombre), Path.home() / ".local" / "bin" / nombre):
@@ -995,20 +997,33 @@ class SonidoPage(Gtk.Box):
         pack = self.pack_actual()
         volumen = int(self.escala.get_value())
         carpeta = AUDIO_PACKS / pack
-        sonido = carpeta / "sound.ogg"
-        if not sonido.exists():
-            candidatos = sorted(carpeta.glob("*.ogg")) + sorted(carpeta.glob("*.wav"))
-            if not candidatos:
-                self.estado.set_text("Ese pack no tiene sonidos.")
-                return
-            sonido = candidatos[0]
+
+        # Los packs de MechSim traen una grabación larga; "teclado-sonido" la
+        # parte en golpes cortos y los guarda aquí. Preferimos esos trozos.
+        trozos = sorted((Path.home() / ".cache" / "teclado-sonido" / pack).glob("*.ogg"))
+        if trozos:
+            sonido = random.choice(trozos)
+        else:
+            sonido = carpeta / "sound.ogg"
+            if not sonido.exists():
+                candidatos = sorted(carpeta.glob("*.ogg")) + sorted(carpeta.glob("*.wav"))
+                if not candidatos:
+                    self.estado.set_text("Ese pack no tiene sonidos.")
+                    return
+                sonido = candidatos[0]
         try:
-            subprocess.Popen(["pw-play", "--volume", str(volumen), str(sonido)],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            if shutil.which("paplay"):
+                orden = ["paplay", f"--volume={int(volumen * 655.36)}", str(sonido)]
+            elif shutil.which("ffplay"):
+                orden = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
+                         "-volume", str(volumen), str(sonido)]
+            else:
+                orden = ["pw-play", str(sonido)]
+            subprocess.Popen(orden, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
             self.estado.set_text(f"Reproduciendo una muestra de {pack}…")
         except Exception:
-            self.estado.set_text("No pude reproducir la muestra (¿falta pw-play?).")
+            self.estado.set_text("No pude reproducir la muestra (¿falta paplay?).")
 
 
 # ─────────────────────────── visor de capturas ──────────────────────────────
@@ -1256,6 +1271,8 @@ class TiendaPage(Gtk.Box):
          "Shells: programas que dibujan la barra, el dock y los widgets (quickshell, ags, eww)"),
         ("Catppuccin", "catppuccin hyprland",
          "Catppuccin: la paleta pastel más popular, con temas para casi todo"),
+        ("Instalados", None,
+         "Los temas que ya tienes descargados en este equipo: aplícalos sin volver a bajarlos"),
     ]
 
     def __init__(self, ventana):
@@ -1335,6 +1352,11 @@ class TiendaPage(Gtk.Box):
         self.buscar(consulta)
 
     def buscar(self, consulta):
+        if not consulta:                     # chip "Instalados"
+            self.busqueda.set_text("")
+            self.btn_buscar.set_sensitive(True)
+            self.mostrar_instalados()
+            return
         self.busqueda.set_text(consulta)
         self.estado.set_text(f'Buscando «{consulta}» y traduciendo las descripciones…')
         self.btn_buscar.set_sensitive(False)
@@ -1510,6 +1532,106 @@ class TiendaPage(Gtk.Box):
 
         threading.Thread(target=trabajo, daemon=True).start()
         return marco
+
+    def mostrar_instalados(self):
+        """Muestra las paletas que ya están descargadas, listas para aplicar."""
+        while (h := self.flujo.get_first_child()) is not None:
+            self.flujo.remove(h)
+
+        paletas = []
+        if PALETAS_DIR.is_dir():
+            for carpeta in sorted(PALETAS_DIR.iterdir()):
+                if not (carpeta / "colors.json").exists():
+                    continue
+                nombre = carpeta.name
+                try:
+                    datos = json.loads((carpeta / "theme.json").read_text(encoding="utf-8"))
+                    nombre = datos.get("name") or nombre
+                except Exception:
+                    pass
+                paletas.append((carpeta.name, nombre))
+
+        if not paletas:
+            self.estado.set_text(
+                "Todavía no tienes paletas descargadas. Usa «Descargar / actualizar» "
+                "en la pestaña Temas de color, o instala un repo desde la tienda."
+            )
+            return
+
+        actual = ""
+        try:
+            actual = (CACHE_PALETAS / "actual").read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+
+        for ident, nombre in paletas:
+            caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            caja.add_css_class("store-card")
+
+            previa = CACHE_PALETAS / f"previa-{ident}.png"
+            imagen = Gtk.Picture.new_for_paintable(None)
+            if previa.exists():
+                try:
+                    imagen = Gtk.Picture.new_for_paintable(Gdk.Texture.new_from_filename(str(previa)))
+                except Exception:
+                    pass
+            imagen.set_content_fit(Gtk.ContentFit.COVER)
+            imagen.set_can_shrink(True)
+            imagen.set_hexpand(True)
+            imagen.set_size_request(240, 130)
+            marco = Gtk.Frame()
+            marco.add_css_class("store-banner")
+            marco.set_child(imagen)
+            marco.set_overflow(Gtk.Overflow.HIDDEN)
+            caja.append(marco)
+
+            fila = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            titulo = Gtk.Label(label=nombre)
+            titulo.set_xalign(0)
+            titulo.set_ellipsize(3)
+            titulo.set_hexpand(True)
+            titulo.add_css_class("store-title")
+            fila.append(titulo)
+            if ident == actual:
+                chip = Gtk.Label(label="En uso")
+                chip.add_css_class("store-badge")
+                chip.add_css_class("store-badge-ok")
+                fila.append(chip)
+            caja.append(fila)
+
+            sub = Gtk.Label(label=ident)
+            sub.set_xalign(0)
+            sub.add_css_class("store-desc")
+            caja.append(sub)
+
+            acciones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            aplicar = Gtk.Button(label="Aplicar")
+            aplicar.add_css_class("store-instalar")
+            aplicar.add_css_class("suggested-action")
+            aplicar.connect("clicked", lambda *_, i=ident, n=nombre: self.aplicar_paleta(i, n))
+            acciones.append(aplicar)
+            caja.append(acciones)
+            self.flujo.append(caja)
+
+        self.estado.set_text(f"{len(paletas)} temas descargados · pulsa Aplicar para cambiar")
+
+    def aplicar_paleta(self, ident, nombre):
+        self.estado.set_text(f"Aplicando {nombre}…")
+
+        def trabajo():
+            try:
+                subprocess.run([str(PALETA), "aplicar", ident], capture_output=True, timeout=120)
+            except Exception:
+                pass
+            GLib.idle_add(self.fin_aplicar_paleta, ident, nombre)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def fin_aplicar_paleta(self, ident, nombre):
+        self.estado.set_text(f"Tema {nombre} aplicado")
+        self.ventana.pagina_paletas.cargar()
+        self.mostrar_instalados()
+        return False
 
     def ver_capturas(self, r):
         urls = r.get("capturas") or ([r.get("banner")] if r.get("banner") else [])
