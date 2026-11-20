@@ -246,7 +246,7 @@ color13  $mauve
 color6   $teal
 color14  $teal
 color7   $fg
-color15  ${dim#\#}
+color15  $dim
 KITTY
 
     if [ -f "$KITTY_CONF" ] && ! grep -qE '^\s*include\s+tema-actual\.conf' "$KITTY_CONF"; then
