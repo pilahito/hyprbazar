@@ -33,6 +33,9 @@ LISTA = TEMAS_DIR / "temas.txt"
 ACTUAL = TEMAS_DIR / "actual"
 CAMBIAR = TEMAS_DIR / "cambiar-tema.sh"
 CACHE = Path.home() / ".cache" / "temas-hyprland"
+CONFIG_BIBLIOTECA = Path.home() / ".config" / "hyprbazar" / "biblioteca.json"
+CARPETA_FONDOS = Path.home() / "Imágenes" / "Wallpapers"
+EXTENSIONES = (".png", ".jpg", ".jpeg", ".webp", ".avif")
 DESCARGAS = Path.home() / "Imágenes" / "Wallpapers" / "Descargados"
 THUMB_W, THUMB_H = 400, 225
 ICONO_POR_DEFECTO = "Papirus-Dark"
@@ -222,6 +225,9 @@ class Ventana(Gtk.ApplicationWindow):
         self.botones = {}
         self.etiquetas = {}
         self.traduciendo = False
+        self.modo = "temas"          # "temas" o "biblioteca"
+        self._miniaturas = []        # (Gtk.Picture, ruta) pendientes de miniatura
+        self.fondos_biblioteca = []
 
         _cargar_css(CSS_APP)
 
@@ -251,6 +257,15 @@ class Ventana(Gtk.ApplicationWindow):
             barra.append(b)
             return b
 
+        self.btn_biblioteca = boton(
+            "Biblioteca", "Ver todos los fondos de tu carpeta de fondos", self.on_biblioteca, "flat")
+        self.btn_carpeta = Gtk.Button()
+        self.btn_carpeta.set_tooltip_text(
+            "Carpeta de fondos que se está usando · pulsa para cambiarla")
+        self.btn_carpeta.add_css_class("flat")
+        self.btn_carpeta.connect("clicked", lambda *_: self.on_elegir_carpeta())
+        barra.append(self.btn_carpeta)
+        self.actualizar_btn_carpeta()
         boton("Aleatorio", "Aplica un fondo al azar", self.on_aleatorio, "flat")
         boton("Recargar", "Vuelve a leer la lista y regenera las miniaturas",
               lambda: self.cargar(), "flat")
@@ -333,6 +348,231 @@ class Ventana(Gtk.ApplicationWindow):
             self.pagina_paletas.generar_previas()
 
     def cargar(self):
+        """Pinta la pestaña según el modo (temas de la lista o biblioteca)."""
+        if self.modo == "biblioteca":
+            self.cargar_biblioteca()
+        else:
+            self.cargar_temas()
+
+    CANDIDATAS = (
+        Path.home() / "Imágenes" / "Wallpapers",
+        Path.home() / "Pictures" / "Wallpapers",
+        Path.home() / ".temas" / "wallpapers",
+        Path.home() / "HyprLuna" / "Pictures" / "Wallpapers",
+        Path.home() / "Imágenes",
+        Path.home() / "Pictures",
+    )
+
+    def carpeta_biblioteca(self):
+        """Carpeta de fondos: la guardada o, si no hay, la que más imágenes tenga."""
+        try:
+            datos = json.loads(CONFIG_BIBLIOTECA.read_text(encoding="utf-8"))
+            ruta = datos.get("carpeta")
+            if ruta and Path(ruta).is_dir():
+                return Path(ruta)
+        except Exception:
+            pass
+        mejor, maximo = CARPETA_FONDOS, -1
+        for candidata in self.CANDIDATAS:
+            if not candidata.is_dir():
+                continue
+            try:
+                n = sum(1 for f in candidata.rglob("*")
+                        if f.is_file() and f.suffix.lower() in EXTENSIONES)
+            except Exception:
+                n = 0
+            if n > maximo:
+                mejor, maximo = candidata, n
+        return mejor
+
+    def actualizar_btn_carpeta(self):
+        try:
+            nombre = self.carpeta_biblioteca().name
+        except Exception:
+            nombre = "Wallpapers"
+        self.btn_carpeta.set_label(f"📁 {nombre}")
+
+    def cargar_biblioteca(self):
+        """Rejilla con TODOS los fondos de la carpeta elegida."""
+        while (hijo := self.flujo.get_first_child()) is not None:
+            self.flujo.remove(hijo)
+        self.botones.clear()
+        self.etiquetas.clear()
+
+        carpeta = self.carpeta_biblioteca()
+        fondos = []
+        if carpeta.is_dir():
+            try:
+                fondos = sorted(
+                    (f for f in carpeta.rglob("*")
+                     if f.is_file() and f.suffix.lower() in EXTENSIONES),
+                    key=lambda f: f.name.lower())
+            except Exception:
+                fondos = []
+        self.fondos_biblioteca = [str(f) for f in fondos]
+
+        if not self.fondos_biblioteca:
+            self.estado.set_text(
+                f"No hay imágenes en {carpeta}. Usa «Otra carpeta…» para elegir otra.")
+            self.btn_biblioteca.set_label("Volver a temas")
+            return
+
+        for ruta in self.fondos_biblioteca:
+            tarjeta = self.tarjeta_fondo(ruta)
+            self.flujo.append(tarjeta)
+            self.botones[ruta] = tarjeta
+
+        self.filtrar()
+        self.estado.set_text(
+            f"{len(self.fondos_biblioteca)} fondos en {carpeta} · pulsa el que quieras poner de fondo")
+        self._generar_miniaturas()
+
+    def _generar_miniaturas(self):
+        """Genera las miniaturas pendientes en segundo plano, sin bloquear."""
+        pendientes = list(self._miniaturas)
+        self._miniaturas = []
+        if not pendientes:
+            return
+
+        def trabajo():
+            for imagen, ruta in pendientes:
+                try:
+                    thumb = miniatura(ruta)
+                except Exception:
+                    thumb = None
+                if thumb:
+                    GLib.idle_add(self._poner_miniatura, imagen, thumb)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _poner_miniatura(self, imagen, thumb):
+        try:
+            imagen.set_paintable(Gdk.Texture.new_from_filename(str(thumb)))
+        except Exception:
+            pass
+        return False
+
+    def tarjeta_fondo(self, ruta):
+        """Ficha de un fondo de la biblioteca."""
+        caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        caja.add_css_class("store-card")
+
+        imagen = Gtk.Picture.new_for_paintable(None)
+        imagen.set_content_fit(Gtk.ContentFit.COVER)
+        # la miniatura se genera en segundo plano: con 200 fondos, hacerlo aquí
+        # congelaba la ventana (la miniatura de cada imagen tarda lo suyo)
+        self._miniaturas.append((imagen, ruta))
+        imagen.set_can_shrink(True)
+        imagen.set_hexpand(True)
+        imagen.set_size_request(240, 140)
+        marco = Gtk.Frame()
+        marco.add_css_class("store-banner")
+        marco.set_child(imagen)
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
+        caja.append(marco)
+
+        nombre = Gtk.Label(label=Path(ruta).stem.replace("_", " "))
+        nombre.set_xalign(0)
+        nombre.set_ellipsize(3)
+        nombre.set_hexpand(True)
+        nombre.add_css_class("store-title")
+        caja.append(nombre)
+
+        sub = Gtk.Label(label=str(Path(ruta).relative_to(self.carpeta_biblioteca())))
+        sub.set_xalign(0)
+        sub.set_ellipsize(2)
+        sub.add_css_class("store-desc")
+        caja.append(sub)
+
+        acciones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        aplicar = Gtk.Button(label="Poner de fondo")
+        aplicar.add_css_class("store-instalar")
+        aplicar.add_css_class("suggested-action")
+        aplicar.connect("clicked", lambda *_, r=ruta: self.aplicar_fondo(r))
+        acciones.append(aplicar)
+
+        carpeta = Gtk.Button(label="Carpeta")
+        carpeta.add_css_class("flat")
+        carpeta.connect("clicked", lambda *_, r=ruta: abrir_carpeta(str(Path(r).parent)))
+        acciones.append(carpeta)
+        caja.append(acciones)
+
+        caja.set_tooltip_text(ruta)
+        return caja
+
+    def aplicar_fondo(self, ruta):
+        if not Path(ruta).is_file():
+            self.estado.set_text("Ese archivo ya no existe.")
+            return
+        self.estado.set_text(f"Poniendo {Path(ruta).name} de fondo…")
+        self.set_cursor_from_name("wait")
+
+        def trabajo():
+            ok = False
+            try:
+                monitores = subprocess.run(
+                    ["hyprctl", "monitors", "-j"], capture_output=True, text=True, timeout=15
+                ).stdout
+                nombres = [m["name"] for m in json.loads(monitores or "[]")]
+            except Exception:
+                nombres = []
+            for monitor in nombres:
+                if subprocess.run(["dms", "ipc", "call", "wallpaper", "setFor", monitor, ruta],
+                                  capture_output=True, timeout=30).returncode == 0:
+                    ok = True
+            if not ok:
+                subprocess.run(["dms", "ipc", "call", "wallpaper", "set", ruta],
+                               capture_output=True, timeout=30)
+            # DMS no repinta por sí solo: lo hace awww
+            try:
+                if shutil.which("awww"):
+                    subprocess.run(["pgrep", "-x", "awww-daemon"], capture_output=True, timeout=10)
+                    subprocess.run(["awww", "img", ruta, "--transition-type", "any",
+                                    "--transition-duration", "1"], capture_output=True, timeout=30)
+            except Exception:
+                pass
+            GLib.idle_add(self.fin_aplicar_fondo, ruta)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def fin_aplicar_fondo(self, ruta):
+        self.set_cursor_from_name(None)
+        self.estado.set_text(f"Fondo puesto: {Path(ruta).name}")
+        return False
+
+    def on_biblioteca(self, *_):
+        if self.modo == "temas":
+            self.modo = "biblioteca"
+            self.btn_biblioteca.set_label("Volver a temas")
+        else:
+            self.modo = "temas"
+            self.btn_biblioteca.set_label("Biblioteca")
+        self.busqueda.set_text("")
+        self.actualizar_btn_carpeta()
+        self.cargar()
+
+    def on_elegir_carpeta(self, *_):
+        dialogo = Gtk.FileDialog(title="Elige la carpeta de fondos")
+        dialogo.set_initial_folder(Gio.File.new_for_path(str(self.carpeta_biblioteca())))
+
+        def hecho(dlg, resultado):
+            try:
+                f = dlg.select_folder_finish(resultado)
+            except Exception:
+                return
+            if f is None:
+                return
+            CONFIG_BIBLIOTECA.parent.mkdir(parents=True, exist_ok=True)
+            CONFIG_BIBLIOTECA.write_text(
+                json.dumps({"carpeta": f.get_path()}, indent=1), encoding="utf-8")
+            self.modo = "biblioteca"
+            self.btn_biblioteca.set_label("Volver a temas")
+            self.actualizar_btn_carpeta()
+            self.cargar()
+
+        dialogo.select_folder(self, None, hecho)
+
+    def cargar_temas(self):
         self.temas = leer_temas()
         while (hijo := self.flujo.get_first_child()) is not None:
             self.flujo.remove(hijo)
@@ -346,6 +586,7 @@ class Ventana(Gtk.ApplicationWindow):
             self.botones[t["n"]] = tarjeta
 
         self.filtrar()
+        self._generar_miniaturas()
         self.traducir_nombres()
         self.estado.set_text(
             f"{len(self.temas)} fondos · en uso el {actual or '?'} · pulsa uno para aplicarlo"
@@ -358,13 +599,8 @@ class Ventana(Gtk.ApplicationWindow):
 
         # ── imagen ──
         imagen = Gtk.Picture.new_for_paintable(None)
-        thumb = miniatura(t["fondo"])
-        if thumb:
-            try:
-                imagen = Gtk.Picture.new_for_paintable(Gdk.Texture.new_from_filename(str(thumb)))
-            except Exception:
-                pass
         imagen.set_content_fit(Gtk.ContentFit.COVER)
+        self._miniaturas.append((imagen, t["fondo"]))
         imagen.set_can_shrink(True)
         imagen.set_hexpand(True)
         imagen.set_size_request(240, 140)
@@ -506,6 +742,12 @@ class Ventana(Gtk.ApplicationWindow):
 
     def filtrar(self):
         texto = self.busqueda.get_text().strip().lower()
+        if self.modo == "biblioteca":
+            for ruta in self.fondos_biblioteca:
+                tarjeta = self.botones.get(ruta)
+                if tarjeta is not None:
+                    tarjeta.set_visible(not texto or texto in ruta.lower())
+            return
         for t in self.temas:
             tarjeta = self.botones.get(t["n"])
             if tarjeta is None:
