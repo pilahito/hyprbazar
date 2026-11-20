@@ -2004,21 +2004,19 @@ class TiendaPage(Gtk.Box):
         pie.add_css_class("page-footer")
         pie.append(self.estado)
 
-        # ── rejilla de resultados ──
-        self.flujo = Gtk.FlowBox()
-        self.flujo.set_valign(Gtk.Align.START)
-        self.flujo.set_max_children_per_line(2)
-        self.flujo.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.flujo.set_margin_top(8)
-        self.flujo.set_margin_bottom(16)
-        self.flujo.set_margin_start(14)
-        self.flujo.set_margin_end(14)
-        self.flujo.set_row_spacing(10)
-        self.flujo.set_column_spacing(10)
+        # ── contenido: una rejilla de resultados o varias secciones ──
+        self.contenedor = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.contenedor.set_margin_top(8)
+        self.contenedor.set_margin_bottom(16)
+        self.contenedor.set_margin_start(14)
+        self.contenedor.set_margin_end(14)
+
+        self.flujo = self.nueva_rejilla()
+        self.contenedor.append(self.flujo)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
-        scroll.set_child(self.flujo)
+        scroll.set_child(self.contenedor)
 
         self.append(cab)
         self.append(chips)
@@ -2027,6 +2025,27 @@ class TiendaPage(Gtk.Box):
         self.append(pie)
 
     # ── estado interno ──────────────────────────────────────────────────────
+    def nueva_rejilla(self):
+        """FlowBox de tarjetas con 2 columnas (el ancho lo pone el contenedor)."""
+        flujo = Gtk.FlowBox()
+        flujo.set_valign(Gtk.Align.START)
+        flujo.set_homogeneous(True)
+        flujo.set_max_children_per_line(2)
+        flujo.set_min_children_per_line(1)
+        flujo.set_selection_mode(Gtk.SelectionMode.NONE)
+        flujo.set_row_spacing(10)
+        flujo.set_column_spacing(10)
+        return flujo
+
+    def limpiar(self, nueva=True):
+        """Vacía el contenido y devuelve una rejilla nueva lista para usar."""
+        while (hijo := self.contenedor.get_first_child()) is not None:
+            self.contenedor.remove(hijo)
+        self.flujo = self.nueva_rejilla()
+        if nueva:
+            self.contenedor.append(self.flujo)
+        return self.flujo
+
     @staticmethod
     def _instalados():
         try:
@@ -2048,8 +2067,7 @@ class TiendaPage(Gtk.Box):
         self.busqueda.set_text(consulta)
         self.estado.set_text(f'Buscando «{consulta}» y traduciendo las descripciones…')
         self.btn_buscar.set_sensitive(False)
-        while (h := self.flujo.get_first_child()) is not None:
-            self.flujo.remove(h)
+        self.limpiar()
         self._esqueletos()
 
         def trabajo():
@@ -2305,9 +2323,9 @@ class TiendaPage(Gtk.Box):
 
     def _cabecera_seccion(self, titulo, detalle):
         caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        caja.set_size_request(700, -1)
-        caja.set_margin_top(10)
-        caja.set_margin_bottom(2)
+        caja.set_margin_top(12)
+        caja.set_margin_bottom(4)
+        caja.set_margin_start(2)
         etiqueta = Gtk.Label(label=titulo)
         etiqueta.set_xalign(0)
         etiqueta.add_css_class("title-3")
@@ -2385,11 +2403,13 @@ class TiendaPage(Gtk.Box):
 
     def mostrar_instalados(self):
         """Todo lo descargado (paletas, repos y fondos), con su botón de aplicar."""
-        while (h := self.flujo.get_first_child()) is not None:
-            self.flujo.remove(h)
-        # tarjetas de distinto tamaño (las cabeceras de sección ocupan una fila)
-        self.flujo.set_homogeneous(False)
-
+        self._auto_hecho = True      # que la auto-carga no pise esta vista
+        self.resultados = []
+        self.limpiar(nueva=False)
+        self.contenedor.append(self._cabecera_seccion(
+            "Paletas", "Colores descargados · pulsa Aplicar en el que quieras"))
+        self.flujo = self.nueva_rejilla()
+        self.contenedor.append(self.flujo)
         paletas = []
         if PALETAS_DIR.is_dir():
             for carpeta in sorted(PALETAS_DIR.iterdir()):
@@ -2474,9 +2494,11 @@ class TiendaPage(Gtk.Box):
         except Exception:
             repos = []
         if repos:
-            self.flujo.append(self._cabecera_seccion(
+            self.contenedor.append(self._cabecera_seccion(
                 "Repos descargados",
                 "Aplican su aspecto visual (colores, huecos, bordes y esquinas)"))
+            self.flujo = self.nueva_rejilla()
+            self.contenedor.append(self.flujo)
             for repo in repos:
                 self.flujo.append(self._tarjeta_repo(repo))
 
@@ -2487,8 +2509,10 @@ class TiendaPage(Gtk.Box):
                 fondos += sorted(f for f in carpeta.rglob("*")
                                  if f.is_file() and f.suffix.lower() in EXTENSIONES)
         if fondos:
-            self.flujo.append(self._cabecera_seccion(
+            self.contenedor.append(self._cabecera_seccion(
                 "Fondos descargados", "Pulsa uno para ponerlo de fondo"))
+            self.flujo = self.nueva_rejilla()
+            self.contenedor.append(self.flujo)
             for ruta in fondos[:48]:
                 self.flujo.append(self._tarjeta_fondo_descargado(ruta))
 
