@@ -1,0 +1,845 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""hyprbazar-packs — convierte los temas descargados en la Tienda en
+complementos ("packs") que HyprBazar instala y quita sin recargar Hyprland.
+
+Un pack contiene SOLO cosas seguras para DMS + Hyprland en Lua:
+  · sus fondos de pantalla (copiados a ~/Imágenes/Wallpapers/Temas/<id>/)
+  · el aspecto de las ventanas: huecos, borde, colores del borde, esquinas,
+    desenfoque y sombra (traducido a hl.config en Lua)
+Nunca copia binds, barras, exec-once, reglas, ni ficheros de DMS.
+
+Uso:
+    hyprbazar-packs generar [--red] [slug ...]   crea/actualiza los packs
+    hyprbazar-packs listar [--json]              packs disponibles
+    hyprbazar-packs instalar <id>                lo aplica (en vivo, sin reload)
+    hyprbazar-packs quitar                       vuelve al aspecto anterior
+    hyprbazar-packs estado                       pack instalado ahora
+"""
+import datetime
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+TIENDA = HOME / ".local/share/tienda"
+BASE = HOME / ".local/share/hyprbazar"
+PACKS = BASE / "packs"
+COPIAS = BASE / "copias"
+ESTADO = BASE / "pack-activo.json"
+FONDOS = HOME / "Imágenes/Wallpapers/Temas"
+HYPR = HOME / ".config/hypr"
+TEMA_LUA = HYPR / "hyprbazar-tema.lua"
+HYPRLAND_LUA = HYPR / "hyprland.lua"
+LISTA = HYPR / "temas/temas.txt"
+ICONOS = "Papirus-Dark"
+PREFIJO_LISTA = "Tema descargado: "
+REQUIRE = 'pcall(function() require("hyprbazar-tema") end)'
+
+# Fondos que nunca se ofrecen (a David no le gusta el estilo "hacker")
+PROHIBIDOS = re.compile(r"matrix|digital|lluvia|rain|hacker|glitch|code|python-dev|terminal|binary", re.I)
+EXT_IMG = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+
+# Datos fijos de los repos conocidos (los nuevos se describen solos)
+CONOCIDOS = {
+    "bobcat88-HyprlandBorgRice": {
+        "nombre": "Borg (Material)", "preferido": "MaterialBorg/hyprland.conf",
+        "previa": "previews/material_mockup.png"},
+    "ilyamiro-serpantinum": {"nombre": "Serpantinum"},
+    "liixini-skwd-wall": {"nombre": "Skwd Wall"},
+    "roscaa-stack-dotfiles": {
+        "nombre": "Stack · Catppuccin Mocha",
+        "preferido": ".config/hypr/themes/Catppuccin-Mocha.conf"},
+    "Sly-Harvey-NixOS": {"nombre": "Sly Harvey"},
+    "victorsosaMx-hyperland": {
+        "nombre": "Hyperland Nord", "preferido": "dotfiles/hypr/modules/appearance.conf",
+        "patrones": ["dotfiles/theme-switcher/themes/nord/wallpapers/*"],
+        "fondos_en": "dotfiles/theme-switcher/themes/nord/wallpapers"},
+    "XNM1-linux-nixos-hyprland-config-dotfiles": {"nombre": "NixOS Macchiato"},
+}
+PATRONES_RED = ['**/hyprland.conf', '**/hyprland.lua', '**/hypr/**/*.conf',
+                '**/hypr/**/*.lua', '**/hyprland/**/*.lua', '**/previews/*',
+                '**/preview/*', '.github/assets/*', 'docs/assets/*']
+
+# Opciones que maneja un pack (y que se guardan para poder volver)
+CLAVES = [
+    "general.gaps_in", "general.gaps_out", "general.border_size",
+    "general.col.active_border", "general.col.inactive_border",
+    "decoration.rounding",
+    "decoration.blur.enabled", "decoration.blur.size", "decoration.blur.passes",
+    "decoration.blur.vibrancy", "decoration.blur.noise", "decoration.blur.contrast",
+    "decoration.blur.brightness",
+    "decoration.shadow.enabled", "decoration.shadow.range",
+    "decoration.shadow.render_power", "decoration.shadow.color",
+]
+ENTEROS = {"general.gaps_in", "general.gaps_out", "general.border_size", "decoration.rounding",
+           "decoration.blur.size", "decoration.blur.passes", "decoration.shadow.range",
+           "decoration.shadow.render_power"}
+REALES = {"decoration.blur.vibrancy", "decoration.blur.noise", "decoration.blur.contrast",
+          "decoration.blur.brightness"}
+BOOLS = {"decoration.blur.enabled", "decoration.shadow.enabled"}
+COLORES = {"general.col.active_border", "general.col.inactive_border", "decoration.shadow.color"}
+# nombres antiguos de .conf -> nombre actual
+ALIAS = {
+    "decoration.drop_shadow": "decoration.shadow.enabled",
+    "decoration.shadow_range": "decoration.shadow.range",
+    "decoration.shadow_render_power": "decoration.shadow.render_power",
+    "decoration.col.shadow": "decoration.shadow.color",
+}
+
+
+def sello():
+    return datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def copia(fichero):
+    """Copia de seguridad con fecha antes de tocar un fichero de David."""
+    fichero = Path(fichero)
+    if not fichero.exists():
+        return None
+    COPIAS.mkdir(parents=True, exist_ok=True)
+    destino = COPIAS / f"{fichero.name}.{sello()}"
+    shutil.copy2(fichero, destino)
+    return destino
+
+
+def entorno():
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    env.setdefault("WAYLAND_DISPLAY", "wayland-1")
+    if not env.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        carpeta = Path(env["XDG_RUNTIME_DIR"]) / "hypr"
+        try:
+            ult = max(carpeta.iterdir(), key=lambda p: p.stat().st_mtime)
+            env["HYPRLAND_INSTANCE_SIGNATURE"] = ult.name
+        except Exception:
+            pass
+    return env
+
+
+def run(cmd, timeout=30):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=entorno())
+    except Exception as exc:  # noqa: BLE001
+        return subprocess.CompletedProcess(cmd, 1, "", str(exc))
+
+
+# ───────────────────────── colores ─────────────────────────────────────────
+def color(texto):
+    """Un color de Hyprland -> 'rgba(RRGGBBAA)' (o None)."""
+    t = texto.strip().strip('"\'')
+    m = re.fullmatch(r"rgba\(\s*([0-9a-fA-F]{8})\s*\)", t)
+    if m:
+        return f"rgba({m.group(1).lower()})"
+    m = re.fullmatch(r"rgb\(\s*([0-9a-fA-F]{6})\s*\)", t)
+    if m:
+        return f"rgba({m.group(1).lower()}ff)"
+    m = re.fullmatch(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)", t)
+    if m:
+        r, g, b = (int(m.group(i)) for i in (1, 2, 3))
+        a = float(m.group(4)) if m.group(4) else 1.0
+        a = int(round(a * 255)) if a <= 1 else int(a)
+        return f"rgba({r:02x}{g:02x}{b:02x}{a:02x})"
+    m = re.fullmatch(r"0x([0-9a-fA-F]{8})", t)
+    if m:
+        v = m.group(1).lower()
+        return f"rgba({v[2:]}{v[:2]})"
+    m = re.fullmatch(r"#?([0-9a-fA-F]{6})", t)
+    if m:
+        return f"rgba({m.group(1).lower()}ff)"
+    return None
+
+
+def degradado(texto):
+    """'rgba(..) rgba(..) 45deg' -> {'colores': [...], 'angulo': 45} (o None)."""
+    if isinstance(texto, dict):
+        cols = texto.get("colors") or texto.get("colores") or []
+        if isinstance(cols, dict):
+            cols = list(cols.values())
+        cols = [c for c in (color(str(x)) for x in cols) if c]
+        if not cols:
+            return None
+        ang = texto.get("angle") or texto.get("angulo") or 0
+        try:
+            ang = int(float(ang))
+        except Exception:
+            ang = 0
+        return {"colores": cols, "angulo": ang}
+    partes = re.findall(r"rgba?\([^)]*\)|0x[0-9a-fA-F]{8}|\d+deg", str(texto))
+    cols, ang = [], 0
+    for p in partes:
+        if p.endswith("deg"):
+            ang = int(p[:-3])
+        else:
+            c = color(p)
+            if c:
+                cols.append(c)
+    return {"colores": cols, "angulo": ang} if cols else None
+
+
+def normalizar(clave, valor):
+    clave = ALIAS.get(clave, clave)
+    if clave not in CLAVES:
+        return None, None
+    if isinstance(valor, dict) and clave not in COLORES:
+        return None, None
+    v = valor if isinstance(valor, dict) else str(valor).strip().strip('"\'')
+    try:
+        if clave in ENTEROS:
+            return clave, int(float(v))
+        if clave in REALES:
+            return clave, round(float(v), 3)
+        if clave in BOOLS:
+            return clave, str(v).lower() in ("true", "yes", "on", "1")
+        if clave in COLORES:
+            d = degradado(v)
+            return (clave, d) if d else (None, None)
+    except Exception:
+        return None, None
+    return None, None
+
+
+# ───────────────────────── lectura de .conf ─────────────────────────────────
+def variables_conf(carpeta):
+    vars_ = {}
+    for f in carpeta.rglob("*.conf"):
+        if ".git" in f.parts:
+            continue
+        try:
+            for linea in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                m = re.match(r"^\s*\$([\w]+)\s*=\s*(.+?)\s*(#.*)?$", linea)
+                if m:
+                    vars_.setdefault(m.group(1), m.group(2))
+        except Exception:
+            continue
+    return vars_
+
+
+def leer_conf(texto, vars_):
+    salida = {}
+    pila = []
+    for linea in texto.splitlines():
+        limpia = re.sub(r"\s#.*$|^#.*$", "", linea).strip()
+        if not limpia:
+            continue
+        m = re.match(r"^([\w.:-]+)\s*\{$", limpia)
+        if m:
+            pila.append(m.group(1))
+            continue
+        if limpia.startswith("}"):
+            if pila:
+                pila.pop()
+            continue
+        if "=" in limpia and pila:
+            k, v = [p.strip() for p in limpia.split("=", 1)]
+            for nombre in sorted(vars_, key=len, reverse=True):
+                v = v.replace("$" + nombre, vars_[nombre])
+            ruta = ".".join(pila + [k])
+            c, val = normalizar(ruta, v)
+            if c:
+                salida.setdefault(c, val)
+    return salida
+
+
+# ───────────────────────── lectura de .lua ──────────────────────────────────
+TOKEN = re.compile(r'\s*(?:(?P<texto>"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')'
+                   r'|(?P<numero>-?\d+(?:\.\d+)?)|(?P<ident>[A-Za-z_][\w.]*)|(?P<sigla>[{}\[\]=,;]))')
+
+
+def tabla_lua(texto, pos, locales):
+    """Lee una tabla Lua desde la '{' en pos. Devuelve (dict|list, fin)."""
+    res, lista = {}, []
+    clave = None
+    pos = texto.index("{", pos) + 1
+    while pos < len(texto):
+        while pos < len(texto) and texto[pos] in " \t\r\n,;":
+            pos += 1
+        if pos >= len(texto):
+            break
+        if texto.startswith("--", pos):
+            fin = texto.find("\n", pos)
+            pos = len(texto) if fin < 0 else fin
+            continue
+        if texto[pos] == "}":
+            return (res if res or not lista else lista), pos + 1
+        if texto[pos] == "{":
+            sub, pos = tabla_lua(texto, pos, locales)
+            if clave is not None:
+                res[clave] = sub
+                clave = None
+            else:
+                lista.append(sub)
+            continue
+        m = TOKEN.match(texto, pos)
+        if not m:
+            pos += 1
+            continue
+        pos = m.end()
+        if m.group("sigla") in ("=", ",", ";", "[", "]"):
+            continue
+        valor = None
+        if m.group("texto"):
+            valor = m.group("texto")[1:-1]
+            if texto[pos:].lstrip().startswith("]"):      # ["clave"] = ...
+                clave = valor
+                continue
+        elif m.group("numero"):
+            valor = m.group("numero")
+        elif m.group("ident"):
+            ident = m.group("ident")
+            if texto[pos:].lstrip().startswith("=") and not texto[pos:].lstrip().startswith("=="):
+                clave = ident
+                continue
+            if ident in ("true", "false"):
+                valor = ident
+            elif "." in ident and ident.split(".")[0] in locales:
+                base, _, campo = ident.partition(".")
+                valor = locales[base].get(campo) if isinstance(locales[base], dict) else None
+            elif ident in locales and not isinstance(locales[ident], dict):
+                valor = locales[ident]
+        if clave is not None:
+            if valor is not None:
+                res[clave] = valor
+            clave = None
+        elif valor is not None:
+            lista.append(valor)
+    return res, pos
+
+
+def aplanar(d, prefijo=""):
+    for k, v in d.items():
+        ruta = f"{prefijo}{k}"
+        if isinstance(v, dict) and not any(x in v for x in ("colors", "colores")):
+            yield from aplanar(v, ruta + ".")
+        else:
+            yield ruta, v
+
+
+def leer_lua(texto):
+    locales = {}
+    for m in re.finditer(r"^\s*local\s+(\w+)\s*=\s*\{", texto, re.M):
+        try:
+            t, _ = tabla_lua(texto, m.end() - 1, {})
+            if isinstance(t, dict):
+                locales[m.group(1)] = t
+        except Exception:
+            pass
+    for m in re.finditer(r'^\s*local\s+(\w+)\s*=\s*"([^"]*)"', texto, re.M):
+        locales[m.group(1)] = m.group(2)
+    salida = {}
+    for m in re.finditer(r"hl\.config\s*\(\s*\{", texto):
+        try:
+            t, _ = tabla_lua(texto, m.end() - 1, locales)
+        except Exception:
+            continue
+        if not isinstance(t, dict):
+            continue
+        for ruta, v in aplanar(t):
+            c, val = normalizar(ruta, v)
+            if c:
+                salida.setdefault(c, val)
+    return salida
+
+
+# ───────────────────────── búsqueda en el repo ──────────────────────────────
+NO_ASPECTO = re.compile(r"lock|idle|paper|bind|key|monitor|rule|env|autostart|exec|startup|"
+                        r"workspace|input|plugin|launch|laptop", re.I)
+
+
+def ficheros_aspecto(carpeta, preferido=None):
+    cands = []
+    for f in sorted(carpeta.rglob("*")):
+        if not f.is_file() or ".git" in f.parts or f.suffix not in (".conf", ".lua"):
+            continue
+        rel = str(f.relative_to(carpeta)).lower()
+        if not ("hypr" in rel):
+            continue
+        if NO_ASPECTO.search(f.name):
+            continue
+        # variantes de un selector de temas: solo la elegida
+        if "/themes/" in rel and f.name.lower() not in ("colors.conf", "common.conf"):
+            if not (preferido and str(f.relative_to(carpeta)) == preferido):
+                continue
+        cands.append(f)
+
+    def peso(f):
+        rel = str(f.relative_to(carpeta))
+        if preferido and rel == preferido:
+            return 0
+        n = f.name.lower()
+        if re.search(r"appear|decor|look|theme|setting|general|style", n):
+            return 1
+        if n.startswith("hyprland"):
+            return 2
+        return 3
+    return sorted(cands, key=lambda f: (peso(f), str(f)))
+
+
+def aspecto_de(carpeta, preferido=None):
+    vars_ = variables_conf(carpeta)
+    total, usados = {}, []
+    for f in ficheros_aspecto(carpeta, preferido):
+        texto = f.read_text(encoding="utf-8", errors="replace")
+        valores = leer_lua(texto) if f.suffix == ".lua" else leer_conf(texto, vars_)
+        if valores:
+            usados.append(str(f.relative_to(carpeta)))
+            for k, v in valores.items():
+                total.setdefault(k, v)
+    return total, usados
+
+
+def tam_imagen(f):
+    try:
+        from PIL import Image
+        with Image.open(f) as im:
+            return im.size
+    except Exception:
+        return (0, 0)
+
+
+def fondos_de(carpeta, info):
+    base = carpeta / info["fondos_en"] if info.get("fondos_en") else carpeta
+    salida = []
+    for f in sorted(base.rglob("*")):
+        if not f.is_file() or ".git" in f.parts or f.suffix.lower() not in EXT_IMG:
+            continue
+        rel = str(f.relative_to(carpeta)).lower()
+        if re.search(r"screenshot|records?/|preview|mockup|assets|icon|logo|\.config/(wezterm|rofi|dunst|waybar)", rel):
+            continue
+        if PROHIBIDOS.search(f.name):
+            continue
+        w, h = tam_imagen(f)
+        if w < 1280 or h < 720:
+            continue
+        salida.append(f)
+    return salida[:20]
+
+
+def previa_de(carpeta):
+    pref = []
+    for f in sorted(carpeta.rglob("*")):
+        if not f.is_file() or ".git" in f.parts or f.suffix.lower() not in EXT_IMG:
+            continue
+        rel = str(f.relative_to(carpeta)).lower()
+        if re.search(r"preview|mockup|screenshot", rel) and not re.search(r"color|ansi|rofi|sddm|step", rel):
+            w, _ = tam_imagen(f)
+            if w >= 600:
+                pref.append(f)
+    return pref[0] if pref else None
+
+
+def miniatura(origen, destino, ancho=640):
+    try:
+        from PIL import Image
+        with Image.open(origen) as im:
+            im = im.convert("RGB")
+            alto = max(1, int(im.height * ancho / im.width))
+            im.resize((ancho, alto)).save(destino, "JPEG", quality=85)
+        return True
+    except Exception:
+        return False
+
+
+# ───────────────────────── descripción ──────────────────────────────────────
+def describir(aspecto, n_fondos):
+    trozos = []
+    if "general.col.active_border" in aspecto:
+        d = aspecto["general.col.active_border"]
+        trozos.append("borde degradado" if len(d["colores"]) > 1 else "borde de color propio")
+    if "decoration.rounding" in aspecto:
+        trozos.append(f"esquinas de {aspecto['decoration.rounding']} px")
+    if "general.gaps_out" in aspecto or "general.gaps_in" in aspecto:
+        trozos.append(f"separación {aspecto.get('general.gaps_in', '-')}/{aspecto.get('general.gaps_out', '-')}")
+    if aspecto.get("decoration.blur.enabled") is True:
+        trozos.append("desenfoque")
+    if aspecto.get("decoration.shadow.enabled") is True:
+        trozos.append("sombra")
+    texto = ", ".join(trozos).capitalize()
+    if n_fondos:
+        texto += (". " if texto else "") + f"Incluye {n_fondos} fondo{'s' if n_fondos != 1 else ''}."
+    elif texto:
+        texto += ". Mantiene tu fondo actual."
+    return texto
+
+
+def generar(slug, red=False):
+    carpeta = TIENDA / slug
+    if not carpeta.is_dir():
+        return None
+    info = CONOCIDOS.get(slug, {})
+    if red and (carpeta / ".git").is_dir():
+        sparse = run(["git", "-C", str(carpeta), "config", "core.sparseCheckout"]).stdout.strip()
+        if sparse == "true":
+            run(["git", "-C", str(carpeta), "sparse-checkout", "add", *PATRONES_RED,
+                 *info.get("patrones", [])], timeout=300)
+    repo = slug
+    origen = run(["git", "-C", str(carpeta), "remote", "get-url", "origin"]).stdout.strip()
+    m = re.search(r"github\.com[/:](.+?)(?:\.git)?$", origen)
+    if m:
+        repo = m.group(1)
+    aspecto, usados = aspecto_de(carpeta, info.get("preferido"))
+    fondos = fondos_de(carpeta, info)
+
+    dest_pack = PACKS / slug
+    dest_pack.mkdir(parents=True, exist_ok=True)
+    dest_fondos = FONDOS / slug
+    copiados = []
+    if fondos:
+        dest_fondos.mkdir(parents=True, exist_ok=True)
+        for f in fondos:
+            d = dest_fondos / f.name
+            if not d.exists():
+                shutil.copy2(f, d)
+            copiados.append(str(d))
+    previa = (carpeta / info["previa"]) if info.get("previa") and (carpeta / info["previa"]).exists() else None
+    previa = previa or previa_de(carpeta) or (fondos[0] if fondos else None)
+    previa_ok = ""
+    if previa and miniatura(previa, dest_pack / "previa.jpg"):
+        previa_ok = str(dest_pack / "previa.jpg")
+
+    if aspecto:
+        tipo, motivo = "aspecto", ""
+    elif copiados:
+        tipo, motivo = "solo-fondos", "El repo no trae ajustes de ventanas de Hyprland que se puedan usar."
+    else:
+        tipo = "omitido"
+        motivo = ("No trae ni fondos de pantalla ni ajustes de ventanas de Hyprland "
+                  "utilizables con tu escritorio (DMS + Hyprland en Lua).")
+    nombre = info.get("nombre") or repo.split("/")[-1].replace("-", " ").replace("_", " ").title()
+    pack = {
+        "id": slug, "nombre": nombre, "repo": repo, "url": f"https://github.com/{repo}",
+        "tipo": tipo, "motivo": motivo,
+        "descripcion": describir(aspecto, len(copiados)) or motivo,
+        "previa": previa_ok, "fondos": copiados, "fondo": copiados[0] if copiados else "",
+        "aspecto": aspecto, "origen_aspecto": usados,
+        "generado": sello(),
+    }
+    (dest_pack / "pack.json").write_text(json.dumps(pack, ensure_ascii=False, indent=1), encoding="utf-8")
+    (dest_pack / "tema.lua").write_text(lua_de(aspecto, f"Pack «{nombre}» ({repo})"), encoding="utf-8")
+    return pack
+
+
+# ───────────────────────── Lua ──────────────────────────────────────────────
+def lua_valor(clave, v):
+    if clave in COLORES:
+        cols = v["colores"]
+        if len(cols) == 1 and not v.get("angulo"):
+            return f'"{cols[0]}"'
+        if clave == "decoration.shadow.color":
+            return f'"{cols[0]}"'
+        lista = ", ".join(f'"{c}"' for c in cols)
+        return f"{{ colors = {{ {lista} }}, angle = {int(v.get('angulo') or 0)} }}"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)
+
+
+def tabla_de(aspecto):
+    arbol = {}
+    for clave in CLAVES:
+        if clave not in aspecto:
+            continue
+        partes = clave.split(".")
+        if partes[:2] == ["general", "col"]:
+            partes = ["general", "col", partes[2]]
+        nodo = arbol
+        for p in partes[:-1]:
+            nodo = nodo.setdefault(p, {})
+        nodo[partes[-1]] = lua_valor(clave, aspecto[clave])
+
+    def pintar(nodo, nivel):
+        lineas = []
+        for k, v in nodo.items():
+            sang = "\t" * nivel
+            if isinstance(v, dict):
+                lineas.append(f"{sang}{k} = {{")
+                lineas += pintar(v, nivel + 1)
+                lineas.append(f"{sang}}},")
+            else:
+                lineas.append(f"{sang}{k} = {v},")
+        return lineas
+    return "hl.config({\n" + "\n".join(pintar(arbol, 1)) + "\n})"
+
+
+def lua_de(aspecto, titulo):
+    cab = (f"-- {titulo}\n-- Generado por HyprBazar (hyprbazar-packs). Solo aspecto de ventanas.\n")
+    return cab + (tabla_de(aspecto) + "\n" if aspecto else "-- (este pack no cambia el aspecto)\n")
+
+
+# ───────────────────────── foto del aspecto actual ──────────────────────────
+def leer_opcion(clave):
+    ruta = clave.replace(".", ":") if not clave.startswith("general.col.") else \
+        "general:" + clave[len("general."):]
+    r = run(["hyprctl", "getoption", ruta, "-j"], timeout=10)
+    try:
+        d = json.loads(r.stdout)
+    except Exception:
+        return None
+    if "int" in d:
+        v = d["int"]
+    elif "float" in d:
+        v = d["float"]
+    elif "bool" in d:
+        v = d["bool"]
+    elif "css" in d:
+        nums = [int(x) for x in str(d["css"]).split()]
+        v = nums[0] if len(set(nums)) == 1 else {"top": nums[0], "right": nums[1],
+                                                 "bottom": nums[2], "left": nums[3]}
+    elif "gradient" in d:
+        partes = str(d["gradient"]).split()
+        cols = [f"rgba({p[2:]}{p[:2]})" for p in partes if re.fullmatch(r"[0-9a-fA-F]{8}", p)]
+        ang = next((int(p[:-3]) for p in partes if p.endswith("deg")), 0)
+        v = {"colores": cols, "angulo": ang}
+    elif "str" in d:
+        v = d["str"]
+    else:
+        return None
+    if clave in BOOLS:
+        v = bool(v)
+    return v
+
+
+def foto_actual():
+    foto = {}
+    for clave in CLAVES:
+        v = leer_opcion(clave)
+        if v is not None:
+            foto[clave] = v
+    return foto
+
+
+def lua_foto(foto):
+    """Como tabla_de, pero admite gaps como tabla css."""
+    aspecto = {}
+    extra = {}
+    for k, v in foto.items():
+        if isinstance(v, dict) and k in ("general.gaps_in", "general.gaps_out"):
+            extra[k.split(".")[1]] = "{ top = %d, right = %d, bottom = %d, left = %d }" % (
+                v["top"], v["right"], v["bottom"], v["left"])
+        else:
+            aspecto[k] = v
+    lua = tabla_de(aspecto)
+    if extra:
+        lua += "\nhl.config({ general = { " + ", ".join(f"{k} = {v}" for k, v in extra.items()) + " } })"
+    return lua
+
+
+def evaluar(lua):
+    r = run(["hyprctl", "eval", lua], timeout=20)
+    return r.returncode == 0 and "error" not in (r.stdout + r.stderr).lower(), (r.stdout + r.stderr).strip()
+
+
+# ───────────────────────── fondo ────────────────────────────────────────────
+def monitores():
+    try:
+        return [m["name"] for m in json.loads(run(["hyprctl", "monitors", "-j"]).stdout or "[]")]
+    except Exception:
+        return []
+
+
+def fondos_actuales():
+    salida = {}
+    for mon in monitores():
+        r = run(["dms", "ipc", "call", "wallpaper", "getFor", mon], timeout=15)
+        ruta = r.stdout.strip()
+        if ruta and Path(ruta).is_file():
+            salida[mon] = ruta
+    if not salida:
+        # DMS no responde: se mira lo que está pintando awww
+        for linea in run(["awww", "query"], timeout=10).stdout.splitlines():
+            m = re.search(r"^:?\s*([\w-]+):.*image:\s*(.+)$", linea.strip())
+            if m and Path(m.group(2)).is_file():
+                salida[m.group(1)] = m.group(2)
+    return salida
+
+
+def poner_fondo(ruta, por_monitor=None):
+    """Igual que la pestaña Fondos: DMS por monitor (regenera colores) + awww."""
+    ok = False
+    for mon in monitores():
+        r_mon = (por_monitor or {}).get(mon, ruta)
+        if not r_mon:
+            continue
+        if run(["dms", "ipc", "call", "wallpaper", "setFor", mon, r_mon], timeout=30).returncode == 0:
+            ok = True
+    if not ok and ruta:
+        run(["dms", "ipc", "call", "wallpaper", "set", ruta], timeout=30)
+    if shutil.which("awww"):
+        if por_monitor:
+            for mon, r_mon in por_monitor.items():
+                run(["awww", "img", "-o", mon, r_mon, "--transition-type", "any",
+                     "--transition-duration", "1"], timeout=30)
+        elif ruta:
+            run(["awww", "img", ruta, "--transition-type", "any", "--transition-duration", "1"], timeout=30)
+
+
+# ───────────────────────── instalar / quitar ────────────────────────────────
+def asegurar_require():
+    texto = HYPRLAND_LUA.read_text(encoding="utf-8")
+    if 'require("hyprbazar-tema")' in texto:
+        return
+    copia(HYPRLAND_LUA)
+    bloque = ("\n-- Pack de tema instalado desde HyprBazar (Complementos > Temas descargados).\n"
+              "-- Va después de DMS para que sus valores manden; si no hay pack, no hace nada.\n"
+              + REQUIRE + "\n")
+    ancla = 'require("dms.windowrules")'
+    if ancla in texto:
+        texto = texto.replace(ancla, ancla + "\n" + bloque, 1)
+    else:
+        texto = texto.rstrip() + "\n" + bloque
+    HYPRLAND_LUA.write_text(texto, encoding="utf-8")
+
+
+def escribir_tema_lua(contenido):
+    if TEMA_LUA.exists():
+        copia(TEMA_LUA)
+    TEMA_LUA.write_text(contenido, encoding="utf-8")
+
+
+def leer_estado():
+    try:
+        return json.loads(ESTADO.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def quitar_linea_lista(linea):
+    if not linea or not LISTA.exists():
+        return
+    lineas = LISTA.read_text(encoding="utf-8").splitlines()
+    if linea not in lineas:
+        return
+    copia(LISTA)
+    LISTA.write_text("\n".join(l for l in lineas if l != linea) + "\n", encoding="utf-8")
+
+
+def cargar_pack(pid):
+    f = PACKS / pid / "pack.json"
+    if not f.exists():
+        raise SystemExit(f"no existe el pack {pid}")
+    return json.loads(f.read_text(encoding="utf-8"))
+
+
+def cmd_instalar(pid):
+    pack = cargar_pack(pid)
+    if pack["tipo"] == "omitido":
+        raise SystemExit(f"el pack {pid} no tiene nada que instalar: {pack['motivo']}")
+    estado = leer_estado()
+    if estado.get("id"):
+        # solo un pack a la vez: se quita el anterior conservando la foto original
+        cmd_quitar(silencioso=True, reponer_fondo=False)
+        estado_ant = leer_estado()
+    else:
+        estado_ant = {}
+    foto = estado_ant.get("foto") or foto_actual()
+    fondos_previos = estado_ant.get("fondos_previos") or fondos_actuales()
+
+    # 1) fondo (DMS regenera la paleta) — antes del aspecto para que los
+    #    colores del borde del pack no los pise la paleta nueva
+    if pack.get("fondo"):
+        poner_fondo(pack["fondo"])
+        time.sleep(4)
+    # 2) aspecto: fichero propio + require + en vivo
+    asegurar_require()
+    escribir_tema_lua((PACKS / pid / "tema.lua").read_text(encoding="utf-8"))
+    ok, salida = True, ""
+    if pack.get("aspecto"):
+        ok, salida = evaluar(tabla_de(pack["aspecto"]))
+    # 3) lista de temas
+    linea = ""
+    if pack.get("fondo"):
+        linea = f"{PREFIJO_LISTA}{pack['nombre']}|{pack['fondo']}|{ICONOS}"
+        lineas = LISTA.read_text(encoding="utf-8").splitlines() if LISTA.exists() else []
+        if linea not in lineas:
+            copia(LISTA)
+            with LISTA.open("a", encoding="utf-8") as fh:
+                fh.write(linea + "\n")
+    ESTADO.parent.mkdir(parents=True, exist_ok=True)
+    ESTADO.write_text(json.dumps({"id": pid, "foto": foto, "fondos_previos": fondos_previos,
+                                  "linea": linea, "instalado": sello()},
+                                 ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"pack instalado: {pack['nombre']}" + ("" if ok else f" (aviso al aplicar en vivo: {salida})"))
+
+
+def cmd_quitar(silencioso=False, reponer_fondo=True):
+    estado = leer_estado()
+    if not estado.get("id"):
+        if not silencioso:
+            print("no hay ningún pack instalado")
+        return
+    escribir_tema_lua("-- Ningún pack de tema instalado (HyprBazar). Este fichero se deja vacío a propósito.\n")
+    foto = estado.get("foto") or {}
+    ok, salida = (evaluar(lua_foto(foto)) if foto else (True, ""))
+    quitar_linea_lista(estado.get("linea"))
+    if reponer_fondo and estado.get("fondos_previos"):
+        prev = estado["fondos_previos"]
+        poner_fondo(next(iter(prev.values())), por_monitor=prev)
+        time.sleep(4)
+        # la paleta del fondo anterior vuelve a poner los bordes; la foto manda
+        if foto:
+            evaluar(lua_foto(foto))
+    if reponer_fondo:
+        ESTADO.unlink(missing_ok=True)
+    else:
+        # se conserva la foto ORIGINAL para el siguiente pack
+        estado.pop("id", None)
+        estado["linea"] = ""
+        ESTADO.write_text(json.dumps(estado, ensure_ascii=False, indent=1), encoding="utf-8")
+    if not silencioso:
+        print("pack quitado: aspecto anterior restaurado" + ("" if ok else f" (aviso: {salida})"))
+
+
+def listar():
+    salida = []
+    activo = leer_estado().get("id")
+    if PACKS.is_dir():
+        for d in sorted(PACKS.iterdir(), key=lambda p: p.name.lower()):
+            f = d / "pack.json"
+            if f.exists():
+                try:
+                    p = json.loads(f.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                p["instalado"] = (p["id"] == activo)
+                salida.append(p)
+    return salida
+
+
+def main():
+    args = sys.argv[1:]
+    orden = args[0] if args else "ayuda"
+    resto = args[1:]
+    if orden == "generar":
+        red = "--red" in resto
+        slugs = [a for a in resto if not a.startswith("--")]
+        if not slugs and TIENDA.is_dir():
+            slugs = sorted(d.name for d in TIENDA.iterdir() if d.is_dir())
+        for s in slugs:
+            p = generar(s, red=red)
+            if p:
+                print(f"{p['id']}: {p['tipo']} · {len(p['aspecto'])} ajustes · "
+                      f"{len(p['fondos'])} fondos{' · ' + p['motivo'] if p['motivo'] else ''}")
+    elif orden == "listar":
+        packs = listar()
+        if "--json" in resto:
+            print(json.dumps(packs, ensure_ascii=False))
+        else:
+            for p in packs:
+                print(f"{'*' if p['instalado'] else ' '} {p['id']}: {p['nombre']} ({p['tipo']})")
+    elif orden == "instalar" and resto:
+        cmd_instalar(resto[0])
+    elif orden == "quitar":
+        cmd_quitar()
+    elif orden == "estado":
+        print(leer_estado().get("id") or "ninguno")
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

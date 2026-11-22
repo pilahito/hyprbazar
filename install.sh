@@ -32,7 +32,7 @@ if [ ${#falta[@]} -ne 0 ]; then
 fi
 
 mkdir -p "$BIN" "$APPS"
-for f in hyprbazar hyprbazar-paleta hyprbazar-tienda hyprbazar-tema hyprbazar-teclas teclado-sonido; do
+for f in hyprbazar hyprbazar-paleta hyprbazar-tienda hyprbazar-tema hyprbazar-packs hyprbazar-teclas teclado-sonido; do
     install -m 755 "$AQUI/bin/$f" "$BIN/$f"
     echo "  $f -> $BIN/$f"
 done

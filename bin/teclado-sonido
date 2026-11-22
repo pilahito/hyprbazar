@@ -256,7 +256,7 @@ def main():
     if args.volume is not None:
         volumen_pedido = args.volume
     else:
-        volumen_pedido = guardado.get("volumen", 60)
+        volumen_pedido = guardado.get("volumen", 40)
 
     sonidos = cargar_pack(pack)
     programa = reproductor()
@@ -278,13 +278,32 @@ def main():
     import time
 
     ultimo = 0.0
+    # el volumen se puede cambiar en caliente desde HyprBazar: se vuelve a
+    # leer sonido.json cuando cambia (sin reiniciar este programa)
+    try:
+        marca_config = CONFIG.stat().st_mtime
+    except Exception:
+        marca_config = 0.0
+    revisado = time.monotonic()
     sel = selectors.DefaultSelector()
     for aparato in aparatos:
         sel.register(aparato, selectors.EVENT_READ)
 
     try:
         while True:
-            for clave, _ in sel.select(timeout=1.0):
+            if time.monotonic() - revisado > 0.4:
+                revisado = time.monotonic()
+                try:
+                    m = CONFIG.stat().st_mtime
+                except Exception:
+                    m = marca_config
+                if m != marca_config:
+                    marca_config = m
+                    try:
+                        volumen = max(0, min(100, int(leer_config().get("volumen", volumen))))
+                    except Exception:
+                        pass
+            for clave, _ in sel.select(timeout=0.5):
                 aparato = clave.fileobj
                 try:
                     for evento in aparato.read():
@@ -296,13 +315,18 @@ def main():
                         if ahora - ultimo < SEPARACION_MINIMA:
                             continue
                         ultimo = ahora
+                        if volumen <= 0:
+                            continue
                         archivo = random.choice(sonidos)
                         # Cada reproductor usa su propia forma de poner el volumen:
                         #   paplay  0..65536 (0 % .. 100 %)
                         #   ffplay  -volume 0..100
                         #   pw-play no admite volumen (se toca el del sink)
                         if programa == "paplay":
-                            orden = [programa, f"--volume={int(volumen * 655.36)}", str(archivo)]
+                            orden = [programa, f"--volume={int(volumen * 655.36)}",
+                                     "--client-name=Sonido de teclas",
+                                     "--property=application.icon_name=input-keyboard",
+                                     str(archivo)]
                         elif programa == "ffplay":
                             orden = [programa, "-nodisp", "-autoexit", "-loglevel",
                                      "quiet", "-volume", str(volumen), str(archivo)]

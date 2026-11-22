@@ -31,7 +31,10 @@ mk "$CACHE"; mk "$DATOS"
 
 API="https://api.github.com"
 AUTH=()
-[ -f "$TOKEN_FILE" ] && AUTH=(-H "Authorization: Bearer $(cat "$TOKEN_FILE")")
+# Token: el de ~/.config/tienda/token o, si no hay, el de tu sesión de gh.
+# Sin token GitHub solo deja 10 búsquedas por minuto y la tienda sale vacía.
+TOKEN="$(cat "$TOKEN_FILE" 2>/dev/null || command gh auth token 2>/dev/null || true)"
+[ -n "$TOKEN" ] && AUTH=(-H "Authorization: Bearer $TOKEN")
 
 gh() { curl -sS -m 30 "${AUTH[@]}" -H "Accept: application/vnd.github+json" "$@"; }
 
@@ -97,7 +100,7 @@ buscar() {
 # versión simple y fiable: una línea JSON por repo, con "descripcion_es" y banner
 buscar_simple() {
     local consulta="${1:-hyprland dotfiles}"
-    python3 - "$consulta" "$TRAD" "$(cat "$TOKEN_FILE" 2>/dev/null || true)" <<'PYEOF'
+    python3 - "$consulta" "$TRAD" "$TOKEN" <<'PYEOF'
 import json, re, sys, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -122,6 +125,11 @@ if token:
 q = urllib.parse.quote(consulta)
 datos = pet("https://api.github.com/search/repositories?q=" + q + "&sort=stars&order=desc&per_page=24", headers)
 items = datos.get("items", [])
+# Primero lo que es de Hyprland; los temas de otros escritorios (BSPWM, SDDM...) al final.
+def _es_hypr(it):
+    txt = " ".join([it.get("full_name") or "", it.get("description") or "", " ".join(it.get("topics") or [])]).lower()
+    return "hypr" in txt
+items.sort(key=lambda it: 0 if _es_hypr(it) else 1)
 
 def traducir(texto):
     if not texto:

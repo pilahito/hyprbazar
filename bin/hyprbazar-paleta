@@ -217,6 +217,10 @@ aplicar() {
     } } })" >/dev/null 2>&1
 
     # ── kitty ───────────────────────────────────────────────────────────────
+    # kitty exige "#rrggbb": añadir la almohadilla si el JSON del tema no la trae
+    for _v in bg fg accent surface2 blue bact bina overlay red green yellow mauve teal dim; do
+        case "${!_v}" in "#"*|"") ;; *) printf -v "$_v" '#%s' "${!_v}" ;; esac
+    done
     mk "$(dirname "$KITTY_TEMA")"
     cat > "$KITTY_TEMA" <<KITTY
 # Generado por "paleta aplicar $id" — no editar a mano

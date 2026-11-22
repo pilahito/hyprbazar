@@ -12,6 +12,7 @@ en el equipo (magick/ffmpeg para las miniaturas).
 """
 import hashlib
 import json
+import re
 import os
 import random
 import shutil
@@ -35,7 +36,7 @@ CAMBIAR = TEMAS_DIR / "cambiar-tema.sh"
 CACHE = Path.home() / ".cache" / "temas-hyprland"
 CONFIG_BIBLIOTECA = Path.home() / ".config" / "hyprbazar" / "biblioteca.json"
 CARPETA_FONDOS = Path.home() / "Imágenes" / "Wallpapers"
-EXTENSIONES = (".png", ".jpg", ".jpeg", ".webp", ".avif")
+EXTENSIONES = (".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif")
 DESCARGAS = Path.home() / "Imágenes" / "Wallpapers" / "Descargados"
 THUMB_W, THUMB_H = 400, 225
 ICONO_POR_DEFECTO = "Papirus-Dark"
@@ -95,6 +96,14 @@ window, .background, .pagina { background-color: @window_bg_color; }
   transition: background 120ms ease-in-out;
 }
 .wall-card:hover { background: alpha(currentColor, 0.10); }
+.chip-carpeta { border-radius: 999px; padding: 2px 12px; font-weight: 600; }
+.chip-carpeta:checked { background: alpha(@accent_bg_color, 0.35); }
+.galeria-check { margin: 8px; background: alpha(black, 0.45); border-radius: 999px; padding: 2px 4px; }
+.galeria-marcada { box-shadow: inset 0 0 0 3px @accent_bg_color; }
+.galeria-tam { background: alpha(black, 0.55); color: white; border-radius: 999px;
+               padding: 1px 8px; margin: 8px; font-size: 0.8em; font-weight: 600; }
+.seccion-titulo { font-weight: 800; font-size: 1.15em; margin: 14px 16px 2px 16px; }
+.seccion-sub { margin: 0 16px 4px 16px; opacity: 0.7; font-size: 0.9em; }
 .wall-img { border-radius: 13px 13px 0 0; background: alpha(currentColor, 0.08); }
 .wall-pie { padding: 8px 12px 10px 12px; }
 .wall-nombre { font-weight: 700; }
@@ -126,7 +135,324 @@ def _cargar_css(css):
         Gdk.Display.get_default(), proveedor, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
     )
     aplicados.add(css)
+
+
+# ─────────────────────── aspecto: colores de DMS ────────────────────────────
+DMS_COLORES = Path.home() / ".cache" / "DankMaterialShell" / "dms-colors.json"
+_PALETA_POR_DEFECTO = {
+    "surface": "#131318", "on_surface": "#e5e1e9", "on_surface_variant": "#c8c5d0",
+    "surface_container_low": "#1c1b20", "surface_container": "#201f25",
+    "surface_container_high": "#2a292f", "surface_container_highest": "#35343a",
+    "primary": "#c5c0ff", "on_primary": "#2d2960", "primary_container": "#444078",
+    "on_primary_container": "#e3dfff", "secondary_container": "#464559",
+    "on_secondary_container": "#e4dff9", "tertiary": "#ebb9d0",
+    "outline": "#928f99", "outline_variant": "#47464f", "error": "#ffb4ab",
+}
+
+
+def leer_paleta_dms():
+    """Colores Material You que usa DMS ahora mismo (o unos por defecto)."""
+    paleta = dict(_PALETA_POR_DEFECTO)
+    try:
+        datos = json.loads(DMS_COLORES.read_text(encoding="utf-8"))
+        modo = datos.get("mode", "dark")
+        colores = datos.get("colors", {}).get(modo) or {}
+        for clave, valor in colores.items():
+            if isinstance(valor, str) and valor.startswith("#"):
+                paleta[clave] = valor
+    except Exception:
+        pass
+    return paleta
+
+
+def css_paleta(c):
+    """Hoja de estilos de HyprBazar con los colores de la paleta dada."""
+    return """
+@define-color accent_color %(primary)s;
+@define-color accent_bg_color %(primary)s;
+@define-color accent_fg_color %(on_primary)s;
+@define-color window_bg_color %(surface)s;
+@define-color window_fg_color %(on_surface)s;
+@define-color view_bg_color %(surface)s;
+@define-color headerbar_bg_color %(surface_container)s;
+@define-color card_bg_color %(surface_container)s;
+@define-color popover_bg_color %(surface_container)s;
+
+window, .background, .pagina { background-color: %(surface)s; color: %(on_surface)s; }
+popover > contents { background: %(surface_container_high)s; color: %(on_surface)s; border-radius: 14px; }
+tooltip { background: %(surface_container_highest)s; color: %(on_surface)s; border-radius: 10px; }
+
+/* cabecera */
+headerbar {
+  background: %(surface_container_low)s;
+  color: %(on_surface)s;
+  box-shadow: none;
+  border-bottom: 1px solid alpha(%(outline_variant)s, 0.7);
+  min-height: 54px;
+  padding: 0 10px;
+}
+.hb-marca { font-weight: 800; font-size: 1.08em; color: %(primary)s; margin-left: 4px; }
+.hb-marca-icono { color: %(primary)s; }
+.hb-selector {
+  background: %(surface_container_high)s;
+  border-radius: 999px;
+  padding: 4px;
+}
+.hb-selector button {
+  border-radius: 999px;
+  padding: 6px 16px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: %(on_surface_variant)s;
+  font-weight: 600;
+  transition: background 160ms ease, color 160ms ease;
+}
+.hb-selector button:hover { background: alpha(%(on_surface)s, 0.07); color: %(on_surface)s; }
+.hb-selector button:checked {
+  background: %(primary)s;
+  color: %(on_primary)s;
+}
+
+/* botones */
+button { border-radius: 12px; }
+button.suggested-action {
+  background: %(primary)s;
+  color: %(on_primary)s;
+  border: none;
+  box-shadow: none;
+  border-radius: 999px;
+  font-weight: 700;
+  padding: 6px 18px;
+  transition: background 140ms ease;
+}
+button.suggested-action:hover { background: mix(%(primary)s, %(on_primary)s, 0.14); }
+button.suggested-action:active { background: mix(%(primary)s, %(on_primary)s, 0.26); }
+button.suggested-action:disabled { opacity: 0.45; }
+button.flat { border-radius: 999px; padding: 6px 14px; color: %(on_surface)s; }
+button.flat:hover { background: alpha(%(primary)s, 0.12); color: %(primary)s; }
+
+/* buscador */
+entry {
+  background: %(surface_container_high)s;
+  color: %(on_surface)s;
+  border-radius: 999px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  box-shadow: none;
+  outline: none;
+}
+entry:focus-within { border-color: %(primary)s; background: %(surface_container_highest)s; }
+entry image { color: %(on_surface_variant)s; }
+
+/* barras de cada pestaña */
+.page-toolbar { padding: 14px 20px 8px 20px; }
+.page-footer {
+  padding: 8px 20px;
+  background: %(surface_container_low)s;
+  border-top: 1px solid alpha(%(outline_variant)s, 0.6);
+}
+.page-footer-text { font-size: 0.86em; color: %(on_surface_variant)s; opacity: 0.9; }
+
+/* tarjetas */
+.store-card, .wall-card {
+  background: %(surface_container)s;
+  border: 1px solid alpha(%(outline_variant)s, 0.55);
+  border-radius: 18px;
+  padding: 10px 10px 12px 10px;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.store-card:hover, .wall-card:hover {
+  background: %(surface_container_high)s;
+  border-color: alpha(%(primary)s, 0.55);
+  box-shadow: 0 6px 18px alpha(black, 0.35);
+}
+.store-banner { border-radius: 12px; border: none; background: %(surface_container_highest)s; }
+.store-title { font-weight: 700; font-size: 1.04em; color: %(on_surface)s; }
+.store-desc { color: %(on_surface_variant)s; opacity: 1; font-size: 0.92em; }
+.store-badge {
+  background: %(secondary_container)s;
+  color: %(on_secondary_container)s;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.8em;
+  font-weight: 700;
+}
+.store-badge-ok { background: %(primary_container)s; color: %(on_primary_container)s; }
+.store-estrellas { background: alpha(%(tertiary)s, 0.18); color: %(tertiary)s; }
+.store-instalar { border-radius: 999px; font-weight: 700; }
+.store-chip {
+  border-radius: 999px;
+  padding: 5px 16px;
+  border: 1px solid alpha(%(outline_variant)s, 0.9);
+  color: %(on_surface_variant)s;
+}
+.store-chip:hover { border-color: %(primary)s; color: %(primary)s; }
+.store-chip.chip-activo {
+  background: %(secondary_container)s;
+  color: %(on_secondary_container)s;
+  border-color: transparent;
+}
+
+/* temas de color */
+button.paleta-tarjeta {
+  background: %(surface_container)s;
+  border: 1px solid alpha(%(outline_variant)s, 0.55);
+  border-radius: 18px;
+  padding: 8px 8px 10px 8px;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+button.paleta-tarjeta:hover { background: %(surface_container_high)s; border-color: alpha(%(primary)s, 0.55); }
+button.paleta-activa { border: 2px solid %(primary)s; }
+.paleta-tarjeta frame { border-radius: 12px; border: none; }
+
+/* sonido */
+.tarjeta-ajustes {
+  background: %(surface_container)s;
+  border: 1px solid alpha(%(outline_variant)s, 0.55);
+  border-radius: 20px;
+  padding: 20px 22px;
+}
+.tecla { background: %(surface_container_high)s; }
+.tecla-pulsada { background: %(primary)s; color: %(on_primary)s; }
+.chip-estado { background: %(surface_container_high)s; }
+.chip-encendido { background: %(primary_container)s; color: %(on_primary_container)s; }
+switch:checked { background: %(primary)s; }
+switch:checked > slider { background: %(on_primary)s; }
+scale > trough > highlight { background: %(primary)s; }
+checkbutton check:checked { background: %(primary)s; color: %(on_primary)s; }
+
+.fila-mezclador {
+  background: %(surface_container_high)s;
+  border-radius: 14px;
+  padding: 8px 12px;
+}
+
+/* estados: cargando y vacío */
+.hb-cargando { color: %(on_surface_variant)s; font-weight: 600; }
+.hb-vacio-icono { color: %(primary)s; opacity: 0.85; }
+.hb-vacio-titulo { font-size: 1.35em; font-weight: 800; color: %(on_surface)s; }
+.hb-vacio-texto { color: %(on_surface_variant)s; }
+@keyframes hb-latido { from { opacity: 0.35; } to { opacity: 0.85; } }
+.hb-esqueleto { animation: hb-latido 850ms ease-in-out infinite alternate; }
+.hb-esqueleto-linea { background: %(surface_container_highest)s; border-radius: 999px; min-height: 12px; }
+
+scrollbar slider { background: alpha(%(on_surface)s, 0.22); border-radius: 999px; min-width: 6px; min-height: 6px; }
+scrollbar slider:hover { background: alpha(%(primary)s, 0.6); }
+""" % c
+
+
+_PROVEEDOR_PALETA = None
+_VIGILANTE_PALETA = None
+
+
+def recolorear_app(*_):
+    """(Re)aplica los colores de DMS; se llama al abrir y cada vez que cambian."""
+    global _PROVEEDOR_PALETA
+    pantalla = Gdk.Display.get_default()
+    if pantalla is None:
+        return False
+    nuevo = Gtk.CssProvider()
+    try:
+        nuevo.load_from_data(css_paleta(leer_paleta_dms()).encode("utf-8"))
+    except Exception as e:  # una paleta rara no debe tumbar la app
+        print("HyprBazar: no pude aplicar la paleta:", e, file=sys.stderr)
+        return False
+    if _PROVEEDOR_PALETA is not None:
+        Gtk.StyleContext.remove_provider_for_display(pantalla, _PROVEEDOR_PALETA)
+    Gtk.StyleContext.add_provider_for_display(
+        pantalla, nuevo, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+    _PROVEEDOR_PALETA = nuevo
+    return False
+
+
+def vigilar_paleta():
+    """Si DMS cambia de colores (nuevo fondo), la app se recolorea sola."""
+    global _VIGILANTE_PALETA
+    if _VIGILANTE_PALETA is not None:
+        return
+    try:
+        vig = Gio.File.new_for_path(str(DMS_COLORES)).monitor_file(Gio.FileMonitorFlags.NONE, None)
+    except Exception:
+        return
+    pendiente = {"id": 0}
+
+    def cambio(*_):
+        if pendiente["id"]:
+            GLib.source_remove(pendiente["id"])
+
+        def hacer():
+            pendiente["id"] = 0
+            recolorear_app()
+            return False
+        pendiente["id"] = GLib.timeout_add(500, hacer)
+
+    vig.connect("changed", cambio)
+    _VIGILANTE_PALETA = vig
+
+
+def icono_disponible(*nombres):
+    """Primer icono de la lista que exista en el tema de iconos."""
+    try:
+        tema = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+        for n in nombres:
+            if tema.has_icon(n):
+                return n
+    except Exception:
+        pass
+    return nombres[-1]
+
+
+def estado_vacio(icono, titulo, texto):
+    """Bloque centrado con icono grande, título y explicación."""
+    caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    caja.set_halign(Gtk.Align.CENTER)
+    caja.set_valign(Gtk.Align.CENTER)
+    caja.set_margin_top(60)
+    caja.set_margin_bottom(40)
+    img = Gtk.Image.new_from_icon_name(icono_disponible(icono, "system-search-symbolic"))
+    img.set_pixel_size(64)
+    img.add_css_class("hb-vacio-icono")
+    caja.append(img)
+    t = Gtk.Label(label=titulo)
+    t.add_css_class("hb-vacio-titulo")
+    caja.append(t)
+    d = Gtk.Label()
+    d.set_markup(texto)
+    d.set_wrap(True)
+    d.set_max_width_chars(60)
+    d.set_justify(Gtk.Justification.CENTER)
+    d.add_css_class("hb-vacio-texto")
+    caja.append(d)
+    return caja
+
+
+# pestañas: nombre interno, rótulo corto e iconos (el primero que exista)
+PESTANAS = (
+    ("fondos", "Fondos", ("preferences-desktop-wallpaper-symbolic", "image-x-generic-symbolic")),
+    ("paletas", "Colores", ("preferences-color-symbolic", "color-select-symbolic")),
+    ("tienda", "Tienda", ("system-software-install-symbolic", "folder-download-symbolic")),
+    ("complementos", "Complementos", ("application-x-addon-symbolic", "applications-system-symbolic")),
+    ("sonido", "Sonido", ("audio-volume-high-symbolic", "audio-speakers-symbolic")),
+)
 TIENDA = _local_bin("hyprbazar-tienda", "tienda")
+PACKS_BIN = _local_bin("hyprbazar-packs", "hyprbazar-packs")
+CACHE_GALERIA = Path.home() / ".cache" / "hyprbazar" / "galeria"
+ANIMADOS = Path.home() / "Imágenes" / "Wallpapers" / "Animados"
+# Nada de fondos estilo "hacker" (lluvia digital, Matrix, código…): a David no le gustan
+PROHIBIDOS_FONDO = re.compile(r"matrix|digital|lluvia|rain|hacker|glitch|code|coding|programm|"
+                              r"terminal|binary|python|cyber-?code|computer", re.I)
+
+
+def categoria_fondo(ruta):
+    """Subcarpeta de ~/Imágenes/Wallpapers en la que está el fondo."""
+    try:
+        base = Path(os.path.realpath(CARPETA_FONDOS))
+        rel = Path(os.path.realpath(ruta)).relative_to(base)
+    except Exception:
+        return "Otros"
+    return rel.parts[0] if len(rel.parts) > 1 else "Sueltos"
 
 
 # ────────────────────────────── datos ───────────────────────────────────────
@@ -254,18 +580,34 @@ class Ventana(Gtk.ApplicationWindow):
         self.botones = {}
         self.etiquetas = {}
         self.traduciendo = False
-        self.modo = "temas"          # "temas" o "biblioteca"
+        self.modo = "biblioteca"     # "temas" (Mi lista) o "biblioteca" (carpetas)
         self._miniaturas = []        # (Gtk.Picture, ruta) pendientes de miniatura
         self.fondos_biblioteca = []
 
         _cargar_css(CSS_APP)
 
+        recolorear_app()
+        vigilar_paleta()
+
         cabecera = Gtk.HeaderBar()
         self.pila = Gtk.Stack()
-        self.pila.set_transition_type(Gtk.StackTransitionType.NONE)
-        selector = Gtk.StackSwitcher()
-        selector.set_stack(self.pila)
-        cabecera.set_title_widget(selector)
+        self.pila.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.pila.set_transition_duration(140)
+        # selector propio: pastillas con icono + nombre (se rellena al final)
+        self.selector = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self.selector.add_css_class("hb-selector")
+        self.selector.set_valign(Gtk.Align.CENTER)
+        cabecera.set_title_widget(self.selector)
+        marca = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        icono_marca = Gtk.Image.new_from_icon_name(
+            icono_disponible("hyprbazar", "preferences-desktop-theme-symbolic", "applications-graphics-symbolic"))
+        icono_marca.set_pixel_size(20)
+        icono_marca.add_css_class("hb-marca-icono")
+        marca.append(icono_marca)
+        rotulo_marca = Gtk.Label(label="HyprBazar")
+        rotulo_marca.add_css_class("hb-marca")
+        marca.append(rotulo_marca)
+        cabecera.pack_start(marca)
         self.set_titlebar(cabecera)
 
         # ── barra de herramientas: buscar + acciones ──
@@ -288,6 +630,8 @@ class Ventana(Gtk.ApplicationWindow):
 
         self.btn_biblioteca = boton(
             "Biblioteca", "Ver todos los fondos de tu carpeta de fondos", self.on_biblioteca, "flat")
+        if self.modo == "biblioteca":
+            self.btn_biblioteca.set_label("Volver a temas")
         self.btn_carpeta = Gtk.Button()
         self.btn_carpeta.set_tooltip_text(
             "Carpeta de fondos que se está usando · pulsa para cambiarla")
@@ -299,7 +643,7 @@ class Ventana(Gtk.ApplicationWindow):
         boton("Recargar", "Vuelve a leer la lista y regenera las miniaturas",
               lambda: self.cargar(), "flat")
         boton("Añadir…", "Añade un fondo que ya tengas en el equipo", self.on_anadir, "flat")
-        boton("Descargar", "Descarga fondos nuevos y los añade a la lista",
+        boton("Descargar", "Abre la galería: elige fondos (también animados) y descarga solo los que marques",
               self.on_descargar, "suggested-action")
 
         # ── pie: cuántos hay y cuál está puesto ──
@@ -316,22 +660,36 @@ class Ventana(Gtk.ApplicationWindow):
         self.flujo.set_max_children_per_line(3)
         self.flujo.set_min_children_per_line(2)
         self.flujo.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.flujo.set_margin_top(6)
-        self.flujo.set_margin_bottom(12)
-        self.flujo.set_margin_start(14)
-        self.flujo.set_margin_end(14)
-        self.flujo.set_row_spacing(10)
-        self.flujo.set_column_spacing(10)
+        self.flujo.set_margin_top(8)
+        self.flujo.set_margin_bottom(18)
+        self.flujo.set_margin_start(20)
+        self.flujo.set_margin_end(20)
+        self.flujo.set_row_spacing(14)
+        self.flujo.set_column_spacing(14)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
         scroll.set_child(self.flujo)
 
+        # chips de carpetas (Todas, Anime, Ciudad…): se rellenan al cargar
+        self.categoria = "Todas"
+        self.fila_chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.fila_chips.add_css_class("page-toolbar")
+        scroll_chips = Gtk.ScrolledWindow()
+        scroll_chips.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        scroll_chips.set_child(self.fila_chips)
+
         raiz = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         raiz.append(barra)
+        raiz.append(scroll_chips)
         raiz.append(scroll)
         raiz.append(pie)
-        self.pila.add_titled(raiz, "fondos", "Fondos de pantalla")
+        # la galería vive DENTRO de la pestaña Fondos (sin ventana aparte)
+        self.pila_fondos = Gtk.Stack()
+        self.pila_fondos.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.pila_fondos.add_named(raiz, "mis")
+        self.galeria = None
+        self.pila.add_titled(self.pila_fondos, "fondos", "Fondos de pantalla")
 
         self.pagina_paletas = PaletasPage(self)
         self.pila.add_titled(self.pagina_paletas, "paletas", "Temas de color")
@@ -345,6 +703,7 @@ class Ventana(Gtk.ApplicationWindow):
         self.pagina_sonido = SonidoPage(self)
         self.pila.add_titled(self.pagina_sonido, "sonido", "Sonido")
         self.pila.connect("notify::visible-child", self.on_cambio_pagina)
+        self._crear_selector()
 
         # F5 / Ctrl+R: recargar la pestaña que esté abierta
         atajo = Gtk.ShortcutController()
@@ -352,6 +711,11 @@ class Ventana(Gtk.ApplicationWindow):
             atajo.add_shortcut(Gtk.Shortcut(
                 trigger=Gtk.ShortcutTrigger.parse_string(tecla),
                 action=Gtk.CallbackAction.new(lambda *_: (self.recargar_pestana(), True)[1])))
+        for i, (nombre_p, _r, _i) in enumerate(PESTANAS, start=1):
+            atajo.add_shortcut(Gtk.Shortcut(
+                trigger=Gtk.ShortcutTrigger.parse_string(f"<Alt>{i}"),
+                action=Gtk.CallbackAction.new(
+                    lambda *_, n=nombre_p: (self.pila.set_visible_child_name(n), True)[1])))
         self.add_controller(atajo)
 
         self.set_child(self.pila)
@@ -365,6 +729,8 @@ class Ventana(Gtk.ApplicationWindow):
                 self.pila.set_visible_child_name("sonido")
             if os.environ.get("TEMAS_COMPLEMENTOS") == "1":
                 self.pila.set_visible_child_name("complementos")
+            if os.environ.get("TEMAS_GALERIA") in ("1", "animados"):
+                self.on_descargar()
             if os.environ.get("TEMAS_INSTALADOS") == "1":
                 self.pila.set_visible_child_name("tienda")
                 self.pagina_tienda.busqueda.set_text("")
@@ -380,6 +746,39 @@ class Ventana(Gtk.ApplicationWindow):
         GLib.idle_add(abrir_pestana)
 
         self.cargar()
+
+    # ── selector de pestañas ────────────────────────────────────────────────
+    def _crear_selector(self):
+        self._botones_pestana = {}
+        grupo = None
+        for i, (nombre, rotulo, iconos) in enumerate(PESTANAS, start=1):
+            if self.pila.get_child_by_name(nombre) is None:
+                continue
+            b = Gtk.ToggleButton()
+            caja = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
+            caja.append(Gtk.Image.new_from_icon_name(icono_disponible(*iconos)))
+            caja.append(Gtk.Label(label=rotulo))
+            b.set_child(caja)
+            hijo = self.pila.get_child_by_name(nombre)
+            b.set_tooltip_text(f"{self.pila.get_page(hijo).get_title()}  (Alt+{i})")
+            if grupo is None:
+                grupo = b
+            else:
+                b.set_group(grupo)
+            b.connect("toggled", self._on_pestana, nombre)
+            self.selector.append(b)
+            self._botones_pestana[nombre] = b
+        self._sincronizar_selector()
+        self.pila.connect("notify::visible-child", lambda *_: self._sincronizar_selector())
+
+    def _on_pestana(self, boton, nombre):
+        if boton.get_active() and self.pila.get_visible_child_name() != nombre:
+            self.pila.set_visible_child_name(nombre)
+
+    def _sincronizar_selector(self):
+        b = self._botones_pestana.get(self.pila.get_visible_child_name())
+        if b is not None and not b.get_active():
+            b.set_active(True)
 
     # ── construcción de la lista ────────────────────────────────────────────
     def recargar_pestana(self):
@@ -458,10 +857,7 @@ class Ventana(Gtk.ApplicationWindow):
         fondos = []
         if carpeta.is_dir():
             try:
-                fondos = sorted(
-                    (f for f in carpeta.rglob("*")
-                     if f.is_file() and f.suffix.lower() in EXTENSIONES),
-                    key=lambda f: f.name.lower())
+                fondos = self._escanear_fondos(carpeta)
             except Exception:
                 fondos = []
         self.fondos_biblioteca = [str(f) for f in fondos]
@@ -477,9 +873,9 @@ class Ventana(Gtk.ApplicationWindow):
             self.flujo.append(tarjeta)
             self.botones[ruta] = tarjeta
 
+        self._pintar_chips()
         self.filtrar()
-        self.estado.set_text(
-            f"{len(self.fondos_biblioteca)} fondos en {carpeta} · pulsa el que quieras poner de fondo")
+        self._contar_visibles()
         self._generar_miniaturas()
 
     def _generar_miniaturas(self):
@@ -522,6 +918,7 @@ class Ventana(Gtk.ApplicationWindow):
         imagen.set_size_request(240, 140)
         marco = Gtk.Frame()
         marco.add_css_class("store-banner")
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
         marco.set_child(imagen)
         marco.set_overflow(Gtk.Overflow.HIDDEN)
         caja.append(marco)
@@ -640,6 +1037,7 @@ class Ventana(Gtk.ApplicationWindow):
             self.flujo.append(tarjeta)
             self.botones[t["n"]] = tarjeta
 
+        self._pintar_chips()
         self.filtrar()
         self._generar_miniaturas()
         self.traducir_nombres()
@@ -662,6 +1060,7 @@ class Ventana(Gtk.ApplicationWindow):
 
         marco = Gtk.Frame()
         marco.add_css_class("store-banner")
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
         marco.set_child(imagen)
         marco.set_overflow(Gtk.Overflow.HIDDEN)
         caja.append(marco)
@@ -795,13 +1194,84 @@ class Ventana(Gtk.ApplicationWindow):
         self.traduciendo = False
         return False
 
+    def _escanear_fondos(self, carpeta=None):
+        """Todos los fondos de la carpeta, siguiendo enlaces y subcarpetas."""
+        carpeta = Path(carpeta or CARPETA_FONDOS)
+        salida = []
+        for raiz, dirs, ficheros in os.walk(carpeta, followlinks=True):
+            dirs.sort(key=str.lower)
+            for nombre in ficheros:
+                if Path(nombre).suffix.lower() in EXTENSIONES:
+                    salida.append(str(Path(raiz) / nombre))
+        return sorted(salida, key=lambda r: Path(r).name.lower())
+
+    def _pintar_chips(self, _rutas=None):
+        """Pastillas: «Mi lista» (temas.txt), «Todas» y una por subcarpeta,
+        con el número REAL de archivos de cada carpeta de Wallpapers."""
+        self._pintando_chips = True
+        while (h := self.fila_chips.get_first_child()) is not None:
+            self.fila_chips.remove(h)
+        todos = self._escanear_fondos()
+        cuenta = {}
+        for r in todos:
+            c = categoria_fondo(r)
+            cuenta[c] = cuenta.get(c, 0) + 1
+        if self.categoria != "Todas" and self.categoria not in cuenta:
+            self.categoria = "Todas"
+        activo = "Mi lista" if self.modo == "temas" else self.categoria
+        grupo = None
+        opciones = [("Mi lista", len(leer_temas())), ("Todas", len(todos))] + [
+            (c, cuenta[c]) for c in sorted(cuenta, key=lambda x: (x in ("Otros", "Sueltos"), x.lower()))]
+        for nombre, n in opciones:
+            b = Gtk.ToggleButton(label=f"{nombre}  {n}")
+            b.add_css_class("flat")
+            b.add_css_class("chip-carpeta")
+            if nombre == "Mi lista":
+                b.set_tooltip_text("Tu lista de temas (temas.txt), la que rota al arrancar")
+            if grupo is None:
+                grupo = b
+            else:
+                b.set_group(grupo)
+            b.set_active(nombre == activo)
+            b.connect("toggled", self._on_chip, nombre)
+            self.fila_chips.append(b)
+        self._pintando_chips = False
+
+    def _on_chip(self, boton, nombre):
+        if getattr(self, "_pintando_chips", False) or not boton.get_active():
+            return
+        if nombre == "Mi lista":
+            if self.modo != "temas":
+                self.modo = "temas"
+                self.btn_biblioteca.set_label("Biblioteca")
+                GLib.idle_add(lambda: (self.cargar(), False)[1])
+            return
+        self.categoria = nombre
+        if self.modo != "biblioteca":
+            self.modo = "biblioteca"
+            self.btn_biblioteca.set_label("Volver a temas")
+            GLib.idle_add(lambda: (self.cargar(), False)[1])
+        else:
+            self.filtrar()
+            self._contar_visibles()
+
+    def _contar_visibles(self):
+        if self.modo == "biblioteca":
+            n = len([r for r in self.fondos_biblioteca if self._en_categoria(r)])
+            donde = "todas las carpetas" if self.categoria == "Todas" else self.categoria
+            self.estado.set_text(f"{n} fondos en {donde} · pulsa el que quieras poner de fondo")
+
+    def _en_categoria(self, ruta):
+        cat = getattr(self, "categoria", "Todas")
+        return cat == "Todas" or categoria_fondo(ruta) == cat
+
     def filtrar(self):
         texto = self.busqueda.get_text().strip().lower()
         if self.modo == "biblioteca":
             for ruta in self.fondos_biblioteca:
                 tarjeta = self.botones.get(ruta)
                 if tarjeta is not None:
-                    tarjeta.set_visible(not texto or texto in ruta.lower())
+                    tarjeta.set_visible((not texto or texto in ruta.lower()) and self._en_categoria(ruta))
             return
         for t in self.temas:
             tarjeta = self.botones.get(t["n"])
@@ -872,8 +1342,18 @@ class Ventana(Gtk.ApplicationWindow):
         dialogo.open(self, None, hecho)
 
     def on_descargar(self, *_):
-        ventana = VentanaDescarga(self)
-        ventana.present()
+        """Abre la galería de fondos dentro de la propia pestaña Fondos."""
+        if self.galeria is None:
+            self.galeria = GaleriaPanel(self, self._volver_de_galeria)
+            self.pila_fondos.add_named(self.galeria, "galeria")
+        self.pila.set_visible_child_name("fondos")
+        self.pila_fondos.set_visible_child_name("galeria")
+        self.galeria.activar()
+
+    def _volver_de_galeria(self, descargados=0):
+        self.pila_fondos.set_visible_child_name("mis")
+        if descargados:
+            self.cargar()
 
 
 
@@ -933,9 +1413,11 @@ class PaletasPage(Gtk.Box):
         self.flujo.set_min_children_per_line(1)
         self.flujo.set_selection_mode(Gtk.SelectionMode.NONE)
         self.flujo.set_margin_top(8)
-        self.flujo.set_margin_bottom(8)
-        self.flujo.set_margin_start(10)
-        self.flujo.set_margin_end(10)
+        self.flujo.set_margin_bottom(18)
+        self.flujo.set_margin_start(20)
+        self.flujo.set_margin_end(20)
+        self.flujo.set_row_spacing(14)
+        self.flujo.set_column_spacing(14)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
@@ -948,6 +1430,7 @@ class PaletasPage(Gtk.Box):
         pie.add_css_class("page-footer")
         pie.append(self.etiqueta)
 
+        self.append(barra)
         self.append(scroll)
 
         self.append(pie)
@@ -990,6 +1473,7 @@ class PaletasPage(Gtk.Box):
         marco = Gtk.Frame()
         marco.set_child(imagen)
         marco.add_css_class("card")
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
 
         rotulo = Gtk.Label(label=nombre)
         rotulo.set_ellipsize(3)
@@ -999,13 +1483,18 @@ class PaletasPage(Gtk.Box):
         caja.append(marco)
         caja.append(rotulo)
         if activo:
-            et = Gtk.Label(label="● aplicado")
-            et.add_css_class("accent")
+            et = Gtk.Label(label="Aplicado")
+            et.add_css_class("store-badge")
+            et.add_css_class("store-badge-ok")
+            et.set_halign(Gtk.Align.CENTER)
             caja.append(et)
 
         boton = Gtk.Button()
         boton.set_child(caja)
         boton.add_css_class("flat")
+        boton.add_css_class("paleta-tarjeta")
+        if activo:
+            boton.add_css_class("paleta-activa")
         boton.set_tooltip_text(f"Aplicar el tema {nombre}")
         boton.connect("clicked", lambda *_, i=ident, n=nombre: self.aplicar(i, n))
         self.botones[ident] = boton
@@ -1089,11 +1578,14 @@ TEMA_REPO = Path.home() / ".local" / "bin" / "hyprbazar-tema"
 TECLAS = Path.home() / ".local" / "bin" / "hyprbazar-teclas"
 
 
+VOLUMEN_TECLAS_DEFECTO = 40
+
+
 def leer_sonido():
     try:
         return json.loads(CONFIG_SONIDO.read_text(encoding="utf-8"))
     except Exception:
-        return {"activo": False, "pack": "cherrymx-blue-pbt", "volumen": 60}
+        return {"activo": False, "pack": "cherrymx-blue-pbt", "volumen": VOLUMEN_TECLAS_DEFECTO}
 
 
 def guardar_sonido(datos):
@@ -1364,6 +1856,237 @@ def describir_pack(nombre):
     return (nombre, "#64748b", "pack de sonido de la comunidad")
 
 
+
+# ─────────────────────── mezclador de volumen ───────────────────────────────
+def _pactl_json(*args):
+    try:
+        r = subprocess.run(["pactl", "-f", "json", *args], capture_output=True,
+                           text=True, timeout=4)
+        return json.loads(r.stdout or "[]")
+    except Exception:
+        return []
+
+
+def _porcentaje(volumen):
+    """Media de los canales de un volumen de pactl, en %."""
+    try:
+        vals = [int(str(c.get("value_percent", "0")).rstrip("%")) for c in volumen.values()]
+        return round(sum(vals) / len(vals)) if vals else 0
+    except Exception:
+        return 0
+
+
+def _pactl(*args):
+    try:
+        subprocess.Popen(["pactl", *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+class FilaVolumen(Gtk.Box):
+    """Icono + nombre + deslizador + silenciar, para un programa o la salida."""
+
+    def __init__(self, al_volumen, al_silencio):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.add_css_class("fila-mezclador")
+        self._al_volumen = al_volumen
+        self._al_silencio = al_silencio
+        self._tocado = 0.0
+        self._bloqueo = False
+        self.bloquear_al_silenciar = True
+        self.icono = Gtk.Image()
+        self.icono.set_pixel_size(30)
+        self.append(self.icono)
+        textos = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        textos.set_size_request(170, -1)
+        textos.set_valign(Gtk.Align.CENTER)
+        self.nombre = Gtk.Label(xalign=0)
+        self.nombre.set_ellipsize(3)
+        self.nombre.set_max_width_chars(22)
+        self.nombre.add_css_class("store-title")
+        self.detalle = Gtk.Label(xalign=0)
+        self.detalle.set_ellipsize(3)
+        self.detalle.set_max_width_chars(26)
+        self.detalle.add_css_class("store-desc")
+        textos.append(self.nombre)
+        textos.append(self.detalle)
+        self.append(textos)
+        self.escala = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.escala.set_hexpand(True)
+        self.escala.set_draw_value(False)
+        self.escala.set_valign(Gtk.Align.CENTER)
+        self.escala.connect("value-changed", self._on_valor)
+        self.append(self.escala)
+        self.valor = Gtk.Label(label="0 %")
+        self.valor.set_width_chars(5)
+        self.valor.add_css_class("store-desc")
+        self.append(self.valor)
+        self.mute = Gtk.ToggleButton()
+        self.mute.add_css_class("flat")
+        self.mute.add_css_class("circular")
+        self.mute.set_valign(Gtk.Align.CENTER)
+        self.mute.connect("toggled", self._on_mute)
+        self.append(self.mute)
+
+    def poner(self, nombre, detalle, icono, porcentaje, silenciado):
+        self.nombre.set_text(nombre)
+        self.detalle.set_text(detalle)
+        self.icono.set_from_icon_name(icono)
+        self._bloqueo = True
+        # no se pisa el deslizador mientras lo estás moviendo
+        if time.monotonic() - self._tocado > 1.5:
+            self.escala.set_value(min(100, porcentaje))
+            self.valor.set_text(f"{porcentaje} %")
+        if self.mute.get_active() != silenciado:
+            self.mute.set_active(silenciado)
+        self._icono_mute()
+        self._bloqueo = False
+
+    def _icono_mute(self):
+        silenciado = self.mute.get_active()
+        self.mute.set_icon_name("audio-volume-muted-symbolic" if silenciado
+                                else "audio-volume-high-symbolic")
+        self.mute.set_tooltip_text("Quitar silencio" if silenciado else "Silenciar")
+        self.escala.set_sensitive(not silenciado or not self.bloquear_al_silenciar)
+
+    def _on_valor(self, escala):
+        v = int(escala.get_value())
+        self.valor.set_text(f"{v} %")
+        if self._bloqueo:
+            return
+        self._tocado = time.monotonic()
+        self._al_volumen(v)
+
+    def _on_mute(self, boton):
+        self._icono_mute()
+        if self._bloqueo:
+            return
+        self._al_silencio(boton.get_active())
+
+
+class Mezclador(Gtk.Box):
+    """Mezclador de volumen tipo Windows: salida general y cada programa."""
+
+    def __init__(self):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.add_css_class("tarjeta-ajustes")
+        cab = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        titulo = Gtk.Label(label="Mezclador de volumen", xalign=0)
+        titulo.add_css_class("title-3")
+        titulo.set_hexpand(True)
+        cab.append(titulo)
+        self.append(cab)
+        expl = Gtk.Label(label="Sube o baja cada programa por separado, como en Windows. "
+                               "Los cambios se oyen al momento.", xalign=0)
+        expl.set_wrap(True)
+        expl.add_css_class("store-desc")
+        self.append(expl)
+
+        rotulo_g = Gtk.Label(label="Salida general", xalign=0)
+        rotulo_g.add_css_class("heading")
+        self.append(rotulo_g)
+        self.general = FilaVolumen(
+            lambda v: _pactl("set-sink-volume", "@DEFAULT_SINK@", f"{v}%"),
+            lambda m: _pactl("set-sink-mute", "@DEFAULT_SINK@", "1" if m else "0"))
+        self.append(self.general)
+
+        self.fijas = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.append(self.fijas)
+
+        rotulo_p = Gtk.Label(label="Programas", xalign=0)
+        rotulo_p.add_css_class("heading")
+        rotulo_p.set_margin_top(6)
+        self.append(rotulo_p)
+        self.lista = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.append(self.lista)
+        self.vacio = Gtk.Label(label="Ahora mismo no hay ningún programa sonando. "
+                                     "Pon música o un vídeo y aparecerá aquí.", xalign=0)
+        self.vacio.set_wrap(True)
+        self.vacio.add_css_class("store-desc")
+        self.lista.append(self.vacio)
+        self.filas = {}
+        self._timer = 0
+        self._leyendo = False
+        self.connect("map", self._empezar)
+        self.connect("unmap", self._parar)
+
+    def insertar_fija(self, fila):
+        """Fila que no viene de PipeWire (p. ej. el sonido de las teclas)."""
+        self.fijas.append(fila)
+
+    def _empezar(self, *_):
+        self._refrescar()
+        if not self._timer:
+            self._timer = GLib.timeout_add_seconds(2, self._refrescar)
+
+    def _parar(self, *_):
+        if self._timer:
+            GLib.source_remove(self._timer)
+            self._timer = 0
+
+    def _refrescar(self):
+        if self._leyendo:
+            return True
+        self._leyendo = True
+
+        def trabajo():
+            sinks = _pactl_json("list", "sinks")
+            entradas = _pactl_json("list", "sink-inputs")
+            try:
+                defecto = subprocess.run(["pactl", "get-default-sink"], capture_output=True,
+                                         text=True, timeout=3).stdout.strip()
+            except Exception:
+                defecto = ""
+            GLib.idle_add(self._pintar, sinks, entradas, defecto)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+        return True
+
+    def _pintar(self, sinks, entradas, defecto):
+        self._leyendo = False
+        salida = next((x for x in sinks if x.get("name") == defecto), sinks[0] if sinks else None)
+        if salida:
+            self.general.poner(salida.get("description", "Salida"), "Altavoces / cascos",
+                               icono_disponible("audio-headphones-symbolic" if "headset" in
+                                                salida.get("name", "").lower() or "headphone" in
+                                                salida.get("name", "").lower()
+                                                else "audio-speakers-symbolic",
+                                                "audio-speakers-symbolic"),
+                               _porcentaje(salida.get("volume", {})), bool(salida.get("mute")))
+        vistos = set()
+        for e in entradas:
+            idx = e.get("index")
+            if idx is None:
+                continue
+            pr = e.get("properties", {})
+            if pr.get("application.name") == "Sonido de teclas":
+                continue
+            nombre = (pr.get("application.name") or pr.get("application.process.binary")
+                      or pr.get("media.name") or "Programa")
+            detalle = pr.get("media.name") or pr.get("application.process.binary") or ""
+            if detalle == nombre:
+                detalle = pr.get("application.process.binary", "")
+            binario = (pr.get("application.process.binary") or "").lower()
+            icono = icono_disponible(*(n for n in (pr.get("application.icon_name"), binario,
+                                                   nombre.lower().replace(" ", "-"),
+                                                   "applications-multimedia",
+                                                   "audio-x-generic-symbolic") if n))
+            fila = self.filas.get(idx)
+            if fila is None:
+                fila = FilaVolumen(
+                    lambda v, i=idx: _pactl("set-sink-input-volume", str(i), f"{v}%"),
+                    lambda m, i=idx: _pactl("set-sink-input-mute", str(i), "1" if m else "0"))
+                self.filas[idx] = fila
+                self.lista.append(fila)
+            fila.poner(nombre, detalle, icono, _porcentaje(e.get("volume", {})), bool(e.get("mute")))
+            vistos.add(idx)
+        for idx in list(self.filas):
+            if idx not in vistos:
+                self.lista.remove(self.filas.pop(idx))
+        self.vacio.set_visible(not self.filas)
+        return False
+
+
 class SonidoPage(Gtk.Box):
     """Sonido de teclado al escribir: pack, volumen y encendido."""
 
@@ -1456,7 +2179,7 @@ class SonidoPage(Gtk.Box):
         # volumen
         bloque_vol = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         fila_titulo = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        titulo_vol = Gtk.Label(label="Volumen")
+        titulo_vol = Gtk.Label(label="Volumen de las teclas")
         titulo_vol.set_xalign(0)
         titulo_vol.add_css_class("heading")
         titulo_vol.set_hexpand(True)
@@ -1466,8 +2189,11 @@ class SonidoPage(Gtk.Box):
         fila_titulo.append(self.valor_vol)
         bloque_vol.append(fila_titulo)
 
-        self.escala = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 5)
-        self.escala.set_value(float(self.ajustes.get("volumen", 60)))
+        self.escala = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.escala.set_value(float(self.ajustes.get("volumen", VOLUMEN_TECLAS_DEFECTO)))
+        for marca in (25, 50, 75):
+            self.escala.add_mark(marca, Gtk.PositionType.BOTTOM, None)
+        self._guardar_vol_id = 0
         self.escala.set_hexpand(True)
         self.escala.set_draw_value(False)
         self.escala.connect("value-changed", self.on_cambiar_volumen)
@@ -1508,7 +2234,20 @@ class SonidoPage(Gtk.Box):
         centro.set_margin_bottom(28)
         centro.set_margin_start(16)
         centro.set_margin_end(16)
+        # mezclador arriba (lo más usado) y debajo el sonido de las teclas
+        self.mezclador = Mezclador()
+        self.mezclador.set_margin_bottom(18)
+        self.mezclador.set_size_request(640, -1)
+        # (el mezclador por programa vive en el centro de control de DMS; aquí no se muestra)
         centro.append(tarjeta)
+        # fila fija "Sonido de teclas" en el mezclador, unida al deslizador de abajo
+        self.fila_teclas = FilaVolumen(
+            lambda v: self.escala.set_value(v),
+            lambda m: self.interruptor.set_active(not m))
+        # el volumen de las teclas se puede ajustar aunque estén apagadas
+        self.fila_teclas.bloquear_al_silenciar = False
+        self.mezclador.insertar_fija(self.fila_teclas)
+        self._sincronizar_fila_teclas()
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
@@ -1553,6 +2292,7 @@ class SonidoPage(Gtk.Box):
             imagen.set_size_request(180, 100)
             marco = Gtk.Frame()
             marco.add_css_class("store-banner")
+            marco.set_overflow(Gtk.Overflow.HIDDEN)
             marco.set_child(imagen)
             marco.set_overflow(Gtk.Overflow.HIDDEN)
             tarjeta.append(marco)
@@ -1667,11 +2407,36 @@ class SonidoPage(Gtk.Box):
         if not self._listo:
             return
         self.aplicar()
+        self._sincronizar_fila_teclas()
+
+    def _sincronizar_fila_teclas(self):
+        try:
+            self.fila_teclas.poner(
+                "Sonido de teclas", f"pack {self.pack_actual()}",
+                icono_disponible("input-keyboard-symbolic", "input-keyboard"),
+                int(self.escala.get_value()), not self.interruptor.get_active())
+        except Exception:
+            pass
 
     def on_cambiar_volumen(self, *_):
         if not self._listo:
             return
-        self.aplicar()
+        self.actualizar_estado()
+        self._sincronizar_fila_teclas()
+        # se guarda un instante después de soltar; el reproductor lo lee solo
+        if self._guardar_vol_id:
+            GLib.source_remove(self._guardar_vol_id)
+        self._guardar_vol_id = GLib.timeout_add(250, self._guardar_volumen)
+
+    def _guardar_volumen(self):
+        self._guardar_vol_id = 0
+        self.ajustes = {
+            "activo": self.interruptor.get_active(),
+            "pack": self.pack_actual(),
+            "volumen": int(self.escala.get_value()),
+        }
+        guardar_sonido(self.ajustes)
+        return False
 
     def on_probar(self, *_):
         pack = self.pack_actual()
@@ -1693,7 +2458,9 @@ class SonidoPage(Gtk.Box):
                 sonido = candidatos[0]
         try:
             if shutil.which("paplay"):
-                orden = ["paplay", f"--volume={int(volumen * 655.36)}", str(sonido)]
+                orden = ["paplay", f"--volume={int(volumen * 655.36)}",
+                         "--client-name=Sonido de teclas",
+                         "--property=application.icon_name=input-keyboard", str(sonido)]
             elif shutil.which("ffplay"):
                 orden = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
                          "-volume", str(volumen), str(sonido)]
@@ -1851,6 +2618,7 @@ class VistaCapturas(Gtk.Window):
 
         marco = Gtk.Frame()
         marco.add_css_class("store-banner")
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
         marco.set_child(imagen)
         marco.set_overflow(Gtk.Overflow.HIDDEN)
 
@@ -1985,10 +2753,13 @@ class TiendaPage(Gtk.Box):
         cab.append(self.btn_buscar)
 
         # ── categorías ──
-        chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        chips.set_margin_top(2)
-        chips.set_margin_start(14)
-        chips.set_margin_end(14)
+        chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        chips.set_margin_top(4)
+        chips.set_margin_bottom(4)
+        chips.set_margin_start(20)
+        chips.set_margin_end(20)
+        self._chips = {}
+        self._cargando = None
         for nombre, consulta, ayuda in self.CATEGORIAS:
             b = Gtk.Button(label=nombre)
             b.add_css_class("store-chip")
@@ -1996,6 +2767,7 @@ class TiendaPage(Gtk.Box):
             b.set_tooltip_text(ayuda)
             b.connect("clicked", lambda *_, q=consulta: self.buscar(q))
             chips.append(b)
+            self._chips[consulta] = b
 
         self.estado = Gtk.Label(label="Busca temas de la comunidad; las descripciones se traducen solas.")
         self.estado.set_xalign(0)
@@ -2007,9 +2779,9 @@ class TiendaPage(Gtk.Box):
         # ── contenido: una rejilla de resultados o varias secciones ──
         self.contenedor = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.contenedor.set_margin_top(8)
-        self.contenedor.set_margin_bottom(16)
-        self.contenedor.set_margin_start(14)
-        self.contenedor.set_margin_end(14)
+        self.contenedor.set_margin_bottom(18)
+        self.contenedor.set_margin_start(20)
+        self.contenedor.set_margin_end(20)
 
         self.flujo = self.nueva_rejilla()
         self.contenedor.append(self.flujo)
@@ -2033,9 +2805,22 @@ class TiendaPage(Gtk.Box):
         flujo.set_max_children_per_line(2)
         flujo.set_min_children_per_line(1)
         flujo.set_selection_mode(Gtk.SelectionMode.NONE)
-        flujo.set_row_spacing(10)
-        flujo.set_column_spacing(10)
+        flujo.set_row_spacing(14)
+        flujo.set_column_spacing(14)
         return flujo
+
+    def _marcar_chip(self, consulta):
+        """Resalta la categoría que se está viendo (si la búsqueda es una)."""
+        for q, b in getattr(self, "_chips", {}).items():
+            if q == consulta:
+                b.add_css_class("chip-activo")
+            else:
+                b.remove_css_class("chip-activo")
+
+    def _quitar_cargando(self):
+        if self._cargando is not None and self._cargando.get_parent() is not None:
+            self._cargando.get_parent().remove(self._cargando)
+        self._cargando = None
 
     def limpiar(self, nueva=True):
         """Vacía el contenido y devuelve una rejilla nueva lista para usar."""
@@ -2059,6 +2844,8 @@ class TiendaPage(Gtk.Box):
         self.buscar(consulta)
 
     def buscar(self, consulta):
+        self._marcar_chip(consulta)
+        self._quitar_cargando()
         if not consulta:                     # chip "Instalados"
             self.busqueda.set_text("")
             self.btn_buscar.set_sensitive(True)
@@ -2068,6 +2855,19 @@ class TiendaPage(Gtk.Box):
         self.estado.set_text(f'Buscando «{consulta}» y traduciendo las descripciones…')
         self.btn_buscar.set_sensitive(False)
         self.limpiar()
+        # aviso de "buscando" con ruedita encima de las tarjetas fantasma
+        cargando = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        cargando.set_halign(Gtk.Align.CENTER)
+        cargando.set_margin_top(6)
+        cargando.set_margin_bottom(10)
+        ruedita = Gtk.Spinner()
+        ruedita.start()
+        cargando.append(ruedita)
+        texto = Gtk.Label(label=f"Buscando «{consulta}»…")
+        texto.add_css_class("hb-cargando")
+        cargando.append(texto)
+        self.contenedor.prepend(cargando)
+        self._cargando = cargando
         self._esqueletos()
 
         def trabajo():
@@ -2083,15 +2883,24 @@ class TiendaPage(Gtk.Box):
 
     def _esqueletos(self):
         for _ in range(4):
-            caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
             caja.add_css_class("store-card")
+            caja.add_css_class("hb-esqueleto")
             hueco = Gtk.Box()
             hueco.add_css_class("store-banner")
+            hueco.set_overflow(Gtk.Overflow.HIDDEN)
             hueco.set_size_request(300, 150)
             caja.append(hueco)
+            for ancho in (180, 260):
+                linea = Gtk.Box()
+                linea.add_css_class("hb-esqueleto-linea")
+                linea.set_halign(Gtk.Align.START)
+                linea.set_size_request(ancho, 12)
+                caja.append(linea)
             self.flujo.append(caja)
 
     def mostrar(self, resultados):
+        self._quitar_cargando()
         self.resultados = resultados
         self.btn_buscar.set_sensitive(True)
         # las búsquedas van en rejilla normal (si venimos de "Instalados", que
@@ -2102,15 +2911,11 @@ class TiendaPage(Gtk.Box):
             self.flujo.remove(h)
         if not resultados:
             self.estado.set_text("Sin resultados. Prueba otra búsqueda (GitHub limita las peticiones seguidas).")
-            vacio = Gtk.Label()
-            vacio.set_markup(
-                "<span size='x-large'>Busca temas de la comunidad</span>\n\n"
-                "Escribe arriba (por ejemplo <b>catppuccin</b>, <b>hyprland dots</b> "
+            vacio = estado_vacio(
+                "system-search-symbolic", "No he encontrado nada",
+                "Prueba con otra palabra (por ejemplo <b>catppuccin</b>, <b>hyprland dots</b> "
                 "o <b>quickshell</b>) o pulsa una categoría.\n"
-                "Las descripciones se traducen al español solas.")
-            vacio.set_justify(Gtk.Justification.CENTER)
-            vacio.add_css_class("dim-label")
-            vacio.set_margin_top(60)
+                "Si buscas muchas veces seguidas, GitHub puede pedir un minuto de pausa.")
             self.flujo.append(vacio)
             return
         for r in resultados:
@@ -2133,6 +2938,8 @@ class TiendaPage(Gtk.Box):
         fila.append(titulo)
         estrellas = Gtk.Label(label=f"★ {r.get('estrellas', 0):,}".replace(",", "."))
         estrellas.add_css_class("store-badge")
+        estrellas.add_css_class("store-estrellas")
+        titulo.set_hexpand(True)
         fila.append(estrellas)
         if repo in self.instalados:
             ok = Gtk.Label(label="Instalado")
@@ -2147,7 +2954,9 @@ class TiendaPage(Gtk.Box):
         etiqueta.set_lines(3)
         etiqueta.set_ellipsize(3)
         etiqueta.set_xalign(0)
-        etiqueta.set_max_width_chars(60)
+        etiqueta.set_max_width_chars(40)
+        etiqueta.set_vexpand(True)
+        etiqueta.set_valign(Gtk.Align.START)
         etiqueta.add_css_class("store-desc")
         caja.append(etiqueta)
 
@@ -2196,11 +3005,13 @@ class TiendaPage(Gtk.Box):
         return repo.replace("/", "-")
 
     def _tema_aplicado(self):
+        # Ahora los temas se aplican como packs (hyprbazar-packs): en vivo y
+        # sin `hyprctl reload`, que rompía los botones de las barras.
         try:
-            r = subprocess.run([str(TEMA_REPO), "estado"], capture_output=True,
+            r = subprocess.run([str(PACKS_BIN), "estado"], capture_output=True,
                                text=True, timeout=10)
             texto = r.stdout.strip()
-            return texto.split(":", 1)[1].strip() if ":" in texto else ""
+            return "" if texto in ("", "ninguno") else texto
         except Exception:
             return ""
 
@@ -2211,7 +3022,10 @@ class TiendaPage(Gtk.Box):
 
         def trabajo():
             try:
-                r = subprocess.run([str(TEMA_REPO), "aplicar", slug],
+                if not (Path.home() / ".local/share/hyprbazar/packs" / slug / "pack.json").exists():
+                    subprocess.run([str(PACKS_BIN), "generar", "--red", slug],
+                                   capture_output=True, text=True, timeout=600)
+                r = subprocess.run([str(PACKS_BIN), "instalar", slug],
                                    capture_output=True, text=True, timeout=180)
                 salida = (r.stdout or "") + (r.stderr or "")
                 ok = r.returncode == 0
@@ -2222,6 +3036,10 @@ class TiendaPage(Gtk.Box):
         threading.Thread(target=trabajo, daemon=True).start()
 
     def _fin_aplicar_tema(self, repo, ok, salida):
+        try:
+            self.ventana.pagina_complementos.cargar()
+        except Exception:
+            pass
         if ok:
             self.estado.set_text(
                 f"Tema de {repo} aplicado · si no te gusta, «Volver a como estaba»")
@@ -2234,7 +3052,7 @@ class TiendaPage(Gtk.Box):
     def restaurar_tema(self):
         def trabajo():
             try:
-                subprocess.run([str(TEMA_REPO), "restaurar"], capture_output=True, timeout=180)
+                subprocess.run([str(PACKS_BIN), "quitar"], capture_output=True, timeout=180)
             except Exception:
                 pass
             GLib.idle_add(lambda: (self.estado.set_text("Aspecto anterior restaurado"), False)[1])
@@ -2254,6 +3072,7 @@ class TiendaPage(Gtk.Box):
         """Captura real del repo si la hay; si no, una portada generada."""
         marco = Gtk.Frame()
         marco.add_css_class("store-banner")
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
         marco.set_size_request(300, 150)
 
         CACHE_TIENDA.mkdir(parents=True, exist_ok=True)
@@ -2384,6 +3203,7 @@ class TiendaPage(Gtk.Box):
         imagen.set_size_request(220, 120)
         marco = Gtk.Frame()
         marco.add_css_class("store-banner")
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
         marco.set_child(imagen)
         marco.set_overflow(Gtk.Overflow.HIDDEN)
         caja.append(marco)
@@ -2453,6 +3273,7 @@ class TiendaPage(Gtk.Box):
             imagen.set_size_request(240, 130)
             marco = Gtk.Frame()
             marco.add_css_class("store-banner")
+            marco.set_overflow(Gtk.Overflow.HIDDEN)
             marco.set_child(imagen)
             marco.set_overflow(Gtk.Overflow.HIDDEN)
             caja.append(marco)
@@ -2553,6 +3374,9 @@ class TiendaPage(Gtk.Box):
                 r = subprocess.run([str(TIENDA), "instalar", repo],
                                    capture_output=True, text=True, timeout=900)
                 resumen = (r.stdout or "").strip().splitlines()[-1] if r.stdout.strip() else "instalado"
+                # convertirlo en complemento (Complementos > Temas descargados)
+                subprocess.run([str(PACKS_BIN), "generar", "--red", repo.replace("/", "-")],
+                               capture_output=True, text=True, timeout=600)
             except Exception:
                 resumen = "no se pudo instalar"
             GLib.idle_add(self.fin_instalar, boton, resumen)
@@ -2564,6 +3388,10 @@ class TiendaPage(Gtk.Box):
         boton.set_sensitive(True)
         self.estado.set_text(resumen)
         self.instalados = self._instalados()
+        try:
+            self.ventana.pagina_complementos.cargar()
+        except Exception:
+            pass
         self.ventana.pagina_paletas.cargar()
         self.ventana.pagina_paletas.generar_previas()
         # repintar los resultados: el repo recién instalado ya puede aplicarse
@@ -2622,11 +3450,17 @@ class ComplementosPage(Gtk.Box):
         barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         barra.add_css_class("page-toolbar")
 
-        titulo = Gtk.Label(label="Complementos de Hyprland")
+        titulo = Gtk.Label(label="Temas descargados y complementos de Hyprland")
         titulo.set_xalign(0)
         titulo.set_hexpand(True)
         titulo.add_css_class("store-desc")
         barra.append(titulo)
+
+        regenerar = Gtk.Button(label="Revisar temas")
+        regenerar.set_tooltip_text("Vuelve a mirar los temas descargados de la Tienda y actualiza sus complementos")
+        regenerar.add_css_class("flat")
+        regenerar.connect("clicked", self.on_regenerar)
+        barra.append(regenerar)
 
         actualizar = Gtk.Button(label="Actualizar fuentes")
         actualizar.set_tooltip_text("Trae los últimos cambios de los complementos")
@@ -2653,10 +3487,44 @@ class ComplementosPage(Gtk.Box):
         self.flujo.set_row_spacing(10)
         self.flujo.set_column_spacing(10)
 
+        self.flujo_packs = Gtk.FlowBox()
+        self.flujo_packs.set_valign(Gtk.Align.START)
+        self.flujo_packs.set_homogeneous(True)
+        self.flujo_packs.set_max_children_per_line(3)
+        self.flujo_packs.set_min_children_per_line(2)
+        self.flujo_packs.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.flujo_packs.set_margin_top(8)
+        self.flujo_packs.set_margin_bottom(16)
+        self.flujo_packs.set_margin_start(14)
+        self.flujo_packs.set_margin_end(14)
+        self.flujo_packs.set_row_spacing(10)
+        self.flujo_packs.set_column_spacing(10)
+
+        contenido = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        t_packs = Gtk.Label(label="Temas descargados")
+        t_packs.set_xalign(0)
+        t_packs.add_css_class("seccion-titulo")
+        contenido.append(t_packs)
+        s_packs = Gtk.Label(label="Cada tema que bajas de la Tienda es un complemento: al instalarlo "
+                                  "pone sus fondos y el aspecto de sus ventanas (bordes, esquinas, "
+                                  "separación, desenfoque y sombra). Tu barra y tus atajos no se tocan. "
+                                  "Solo uno a la vez; «Quitar» te devuelve a como estabas.")
+        s_packs.set_wrap(True)
+        s_packs.set_xalign(0)
+        s_packs.add_css_class("seccion-sub")
+        contenido.append(s_packs)
+        contenido.append(self.flujo_packs)
+        t_plug = Gtk.Label(label="Complementos de Hyprland")
+        t_plug.set_xalign(0)
+        t_plug.add_css_class("seccion-titulo")
+        contenido.append(t_plug)
+        contenido.append(self.flujo)
+
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
-        scroll.set_child(self.flujo)
+        scroll.set_child(contenido)
 
+        self.append(barra)
         self.append(scroll)
 
         self.append(pie)
@@ -2689,7 +3557,143 @@ class ComplementosPage(Gtk.Box):
             self.flujo.append(self.tarjeta(nombre, titulo, descripcion, nombre in cargados))
         n = len(COMPLEMENTOS)
         activos = len([x for x in COMPLEMENTOS if x in cargados])
-        self.estado.set_text(f"{n} complementos · {activos} activos ahora mismo")
+        packs = self.cargar_packs()
+        instalado = next((p["nombre"] for p in packs if p.get("instalado")), "ninguno")
+        self.estado.set_text(f"{len(packs)} temas descargados · instalado: {instalado} · "
+                             f"{n} complementos · {activos} activos ahora mismo")
+
+    # ── temas descargados (packs) ───────────────────────────────────────────
+    def cargar_packs(self):
+        while (h := self.flujo_packs.get_first_child()) is not None:
+            self.flujo_packs.remove(h)
+        try:
+            r = subprocess.run([str(PACKS_BIN), "listar", "--json"],
+                               capture_output=True, text=True, timeout=20)
+            packs = json.loads(r.stdout or "[]")
+        except Exception:
+            packs = []
+        # primero los que se pueden instalar
+        packs.sort(key=lambda p: (p.get("tipo") == "omitido", not p.get("instalado"), p.get("nombre", "").lower()))
+        for p in packs:
+            self.flujo_packs.append(self.tarjeta_pack(p))
+        if not packs:
+            aviso = Gtk.Label(label="Aún no hay temas descargados. Baja alguno en la Tienda.")
+            aviso.add_css_class("store-desc")
+            self.flujo_packs.append(aviso)
+        return packs
+
+    def tarjeta_pack(self, p):
+        caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        caja.add_css_class("store-card")
+
+        imagen = Gtk.Picture.new_for_paintable(None)
+        imagen.set_content_fit(Gtk.ContentFit.COVER)
+        imagen.set_can_shrink(True)
+        imagen.set_hexpand(True)
+        imagen.set_size_request(240, 140)
+        previa = p.get("previa") or ""
+        if previa and Path(previa).exists():
+            try:
+                imagen.set_paintable(Gdk.Texture.new_from_filename(previa))
+            except Exception:
+                pass
+        marco = Gtk.Frame()
+        marco.add_css_class("store-banner")
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
+        marco.set_child(imagen)
+        caja.append(marco)
+
+        fila = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        etiqueta = Gtk.Label(label=p.get("nombre", p.get("id", "")))
+        etiqueta.set_xalign(0)
+        etiqueta.set_hexpand(True)
+        etiqueta.set_ellipsize(3)
+        etiqueta.add_css_class("store-title")
+        fila.append(etiqueta)
+        omitido = p.get("tipo") == "omitido"
+        texto_chip = "Sin contenido" if omitido else ("Instalado" if p.get("instalado") else "No instalado")
+        chip = Gtk.Label(label=texto_chip)
+        chip.add_css_class("store-badge")
+        if p.get("instalado"):
+            chip.add_css_class("store-badge-ok")
+        fila.append(chip)
+        caja.append(fila)
+
+        tipo = {"aspecto": "Aspecto de ventanas" + (" + fondos" if p.get("fondos") else ""),
+                "solo-fondos": "Solo fondos", "omitido": "No se puede instalar"}.get(p.get("tipo"), "")
+        sub = Gtk.Label(label=f"{p.get('repo', '')} · {tipo}")
+        sub.set_xalign(0)
+        sub.set_ellipsize(3)
+        sub.add_css_class("store-desc")
+        caja.append(sub)
+
+        desc = Gtk.Label(label=p.get("motivo") if omitido else p.get("descripcion", ""))
+        desc.set_wrap(True)
+        desc.set_lines(3)
+        desc.set_ellipsize(3)
+        desc.set_xalign(0)
+        desc.add_css_class("store-desc")
+        caja.append(desc)
+
+        acciones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        if not omitido:
+            if p.get("instalado"):
+                b = Gtk.Button(label="Quitar")
+                b.add_css_class("flat")
+                b.set_tooltip_text("Vuelve al aspecto y al fondo que tenías antes")
+                b.connect("clicked", lambda btn, i=p["id"]: self.accion_pack("quitar", i, btn))
+            else:
+                b = Gtk.Button(label="Instalar")
+                b.add_css_class("store-instalar")
+                b.add_css_class("suggested-action")
+                b.set_tooltip_text("Pone sus fondos y su aspecto de ventanas ahora mismo")
+                b.connect("clicked", lambda btn, i=p["id"]: self.accion_pack("instalar", i, btn))
+            acciones.append(b)
+        repo = Gtk.Button(label="Ver repo")
+        repo.add_css_class("flat")
+        repo.connect("clicked", lambda *_, u=p.get("url", ""): abrir_url(u))
+        acciones.append(repo)
+        if p.get("fondos"):
+            carpeta = Gtk.Button(label="Fondos")
+            carpeta.add_css_class("flat")
+            carpeta.set_tooltip_text("Abrir la carpeta con los fondos de este tema")
+            carpeta.connect("clicked", lambda *_, f=p["fondos"][0]: abrir_carpeta(str(Path(f).parent)))
+            acciones.append(carpeta)
+        caja.append(acciones)
+        caja.set_tooltip_text(p.get("descripcion", ""))
+        return caja
+
+    def accion_pack(self, que, ident, boton=None):
+        if boton is not None:
+            boton.set_sensitive(False)
+            boton.set_label("Instalando…" if que == "instalar" else "Quitando…")
+        self.estado.set_text("Instalando el tema…" if que == "instalar" else "Volviendo a tu aspecto anterior…")
+
+        def trabajo():
+            cmd = [str(PACKS_BIN), que] + ([ident] if que == "instalar" else [])
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                lineas = [l for l in ((r.stdout or "") + (r.stderr or "")).splitlines() if l.strip()]
+                mensaje = lineas[-1] if lineas else "hecho"
+            except Exception as exc:  # noqa: BLE001
+                mensaje = f"error: {exc}"
+            GLib.idle_add(self.fin_accion, mensaje)
+            GLib.idle_add(lambda: (self.ventana.cargar(), False)[1])
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def on_regenerar(self, *_):
+        self.estado.set_text("Revisando los temas descargados…")
+
+        def trabajo():
+            try:
+                subprocess.run([str(PACKS_BIN), "generar", "--red"], capture_output=True, timeout=900)
+                mensaje = "temas descargados revisados"
+            except Exception:
+                mensaje = "no se pudieron revisar los temas"
+            GLib.idle_add(self.fin_accion, mensaje)
+
+        threading.Thread(target=trabajo, daemon=True).start()
 
     def tarjeta(self, nombre, titulo, descripcion, activo):
         caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -2790,6 +3794,646 @@ class ComplementosPage(Gtk.Box):
             GLib.idle_add(self.fin_accion, mensaje)
 
         threading.Thread(target=trabajo, daemon=True).start()
+
+
+# ────────────────────────────── galería ─────────────────────────────────────
+# Sustituye a la descarga a ciegas de picsum: se ven los fondos antes, se
+# marcan los que gustan y solo se bajan esos. Dos fuentes sin clave:
+#   · Fondos HD: API pública de Wallhaven (solo SFW, 2560x1440 o más, 16:9)
+#   · Animados: GIF/WebP de colecciones públicas en GitHub (awww los anima)
+import queue  # noqa: E402
+import urllib.request  # noqa: E402
+
+WALLHAVEN = "https://wallhaven.cc/api/v1/search"
+# fuera de la búsqueda lo que no gusta (estilo hacker / lluvia digital)
+WALLHAVEN_EXCLUIR = "-matrix -hacker -code -programming -glitch -binary -terminal -ascii"
+FUENTES_ANIMADOS = (
+    ("dharmx/walls", "animated/"),
+    ("JoshuaThadi/Wall-E-Desk", "Live Wallpapers/"),
+    ("Sidmaz666/animated_wallpapers", "gifs/"),
+    ("D3Ext/aesthetic-wallpapers", "images/"),
+    ("maaGGhourr/gif-wallpapers-for-pc", ""),
+)
+MAX_ANIMADO = 25 * 1024 * 1024      # más grande no compensa (memoria y disco)
+MAX_COMPLETO = 8 * 1024 * 1024      # hasta aquí se baja entero para la miniatura
+
+
+def _tam_legible(n):
+    try:
+        n = float(n)
+    except Exception:
+        return "?"
+    for unidad in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unidad == "GB":
+            return f"{n:.0f} {unidad}" if unidad in ("B", "KB") else f"{n:.1f} {unidad}"
+        n /= 1024
+    return "?"
+
+
+_TOKEN_GH = None
+
+
+def _token_gh():
+    global _TOKEN_GH
+    if _TOKEN_GH is None:
+        try:
+            _TOKEN_GH = subprocess.run(["gh", "auth", "token"], capture_output=True,
+                                       text=True, timeout=10).stdout.strip()
+        except Exception:
+            _TOKEN_GH = ""
+    return _TOKEN_GH
+
+
+def _http(url, destino=None, rango=None, timeout=60):
+    """Descarga url. Con destino guarda el archivo (atómico) y devuelve True."""
+    req = urllib.request.Request(url, headers={"User-Agent": "HyprBazar/1.0 (Linux)"})
+    if rango:
+        req.add_header("Range", f"bytes=0-{int(rango)}")
+    if "api.github.com" in url and _token_gh():
+        req.add_header("Authorization", f"Bearer {_token_gh()}")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        if destino is None:
+            return r.read()
+        destino = Path(destino)
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        tmp = destino.with_name(destino.name + ".part")
+        with open(tmp, "wb") as fh:
+            shutil.copyfileobj(r, fh)
+        tmp.replace(destino)
+        return True
+
+
+def lista_animados(forzar=False):
+    """Fondos animados de las colecciones públicas (caché de un día)."""
+    cache = CACHE_GALERIA / "animados.json"
+    if not forzar and cache.exists() and time.time() - cache.stat().st_mtime < 86400:
+        try:
+            return json.loads(cache.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    salida, vistos = [], set()
+    for repo, prefijo in FUENTES_ANIMADOS:
+        try:
+            info = json.loads(_http(f"https://api.github.com/repos/{repo}", timeout=20))
+            rama = info.get("default_branch", "main")
+            arbol = json.loads(_http(f"https://api.github.com/repos/{repo}/git/trees/{rama}?recursive=1",
+                                     timeout=30))
+        except Exception:
+            continue
+        webp_ok = any(x in prefijo.lower() for x in ("gif", "anim", "live"))
+        for e in arbol.get("tree", []):
+            ruta = e.get("path", "")
+            ext = Path(ruta).suffix.lower()
+            if e.get("type") != "blob" or not ruta.startswith(prefijo):
+                continue
+            if ext != ".gif" and not (ext == ".webp" and webp_ok):
+                continue
+            tam = int(e.get("size") or 0)
+            if tam < 60 * 1024 or tam > MAX_ANIMADO or PROHIBIDOS_FONDO.search(ruta):
+                continue
+            if "preview" in ruta.lower() or e.get("sha") in vistos:
+                continue
+            vistos.add(e.get("sha"))
+            url = f"https://raw.githubusercontent.com/{repo}/{rama}/{urllib.parse.quote(ruta)}"
+            nombre = re.sub(r"[_\-]+", " ", Path(ruta).stem).strip()
+            if re.fullmatch(r"[0-9a-f ]{16,}", nombre) or not nombre:
+                nombre = "Animado " + e.get("sha", "")[:6]
+            salida.append({
+                "id": "an-" + hashlib.sha1(url.encode()).hexdigest()[:12],
+                "animado": True, "nombre": nombre[:1].upper() + nombre[1:], "url": url,
+                "ext": ext, "tam": tam, "repo": repo, "res": "",
+            })
+    if salida:
+        CACHE_GALERIA.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(salida, ensure_ascii=False), encoding="utf-8")
+    return salida
+
+
+def _miniatura_desde(origen, destino):
+    magick = shutil.which("magick") or shutil.which("convert")
+    if magick:
+        try:
+            subprocess.run([magick, f"{origen}[0]", "-thumbnail", f"{THUMB_W}x{THUMB_H}^",
+                            "-gravity", "center", "-extent", f"{THUMB_W}x{THUMB_H}", "-strip",
+                            str(destino)], capture_output=True, timeout=60)
+            if Path(destino).exists():
+                return True
+        except Exception:
+            pass
+    try:   # plan B: GdkPixbuf (sirve también con un GIF a medio bajar)
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf
+        cargador = GdkPixbuf.PixbufLoader()
+        cargador.write(Path(origen).read_bytes())
+        try:
+            cargador.close()
+        except Exception:
+            pass
+        pb = cargador.get_pixbuf()
+        if pb is None:
+            return False
+        pb = pb.scale_simple(THUMB_W, THUMB_H, GdkPixbuf.InterpType.BILINEAR)
+        pb.savev(str(destino), "png", [], [])
+        return Path(destino).exists()
+    except Exception:
+        return False
+
+
+def _archivo_animado(it, completo=True):
+    """Ruta en caché del archivo animado (entero o el principio)."""
+    CACHE_GALERIA.mkdir(parents=True, exist_ok=True)
+    entero = CACHE_GALERIA / f"{it['id']}{it['ext']}"
+    if entero.exists() and entero.stat().st_size >= it["tam"]:
+        return entero
+    if completo or it["tam"] <= MAX_COMPLETO:
+        _http(it["url"], entero, timeout=300)
+        return entero
+    trozo = CACHE_GALERIA / f"{it['id']}.inicio{it['ext']}"
+    if not trozo.exists():
+        _http(it["url"], trozo, rango=2_000_000, timeout=120)
+    return trozo
+
+
+def miniatura_galeria(it):
+    CACHE_GALERIA.mkdir(parents=True, exist_ok=True)
+    destino = CACHE_GALERIA / f"{it['id']}.png"
+    if destino.exists():
+        return destino
+    try:
+        if not it.get("animado"):
+            jpg = CACHE_GALERIA / f"{it['id']}.jpg"
+            if not jpg.exists():
+                _http(it["miniatura"], jpg, timeout=40)
+            return jpg
+        origen = _archivo_animado(it, completo=False)
+        return destino if _miniatura_desde(origen, destino) else None
+    except Exception:
+        return None
+
+
+class PreviaPanel(Gtk.Box):
+    """Vista grande de un fondo DENTRO de la galería; los animados se mueven."""
+
+    def __init__(self, galeria, it):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.galeria = galeria
+        self.it = it
+        self.vivo = True
+        self.iterador = None
+        for m in ("top", "bottom", "start", "end"):
+            getattr(self, f"set_margin_{m}")(14)
+
+        fila = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        volver = Gtk.Button(label="← Volver a la galería")
+        volver.add_css_class("flat")
+        volver.connect("clicked", lambda *_: self.galeria.cerrar_previa())
+        fila.append(volver)
+        datos = [it["nombre"]]
+        if it.get("res"):
+            datos.append(it["res"])
+        datos.append(_tam_legible(it["tam"]))
+        if it.get("animado"):
+            datos.append(f"animado · {it.get('repo', '')}")
+        self._datos_info = " · ".join(datos)
+        self.info = Gtk.Label(label=self._datos_info + " · cargando…")
+        self.info.set_xalign(0)
+        self.info.set_hexpand(True)
+        self.info.set_ellipsize(3)
+        self.info.add_css_class("store-desc")
+        fila.append(self.info)
+        self.btn_marcar = Gtk.Button()
+        self.btn_marcar.add_css_class("store-instalar")
+        self.btn_marcar.add_css_class("suggested-action")
+        self.btn_marcar.connect("clicked", self._on_marcar)
+        fila.append(self.btn_marcar)
+        self.append(fila)
+
+        self.imagen = Gtk.Picture.new_for_paintable(None)
+        self.imagen.set_content_fit(Gtk.ContentFit.CONTAIN)
+        self.imagen.set_vexpand(True)
+        self.imagen.set_can_shrink(True)
+        marco = Gtk.Frame()
+        marco.add_css_class("store-banner")
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
+        marco.set_child(self.imagen)
+        self.append(marco)
+        self._texto_marcar()
+        threading.Thread(target=self._cargar, daemon=True).start()
+
+    def parar(self):
+        self.vivo = False
+
+    def _texto_marcar(self):
+        marcado = self.it["id"] in self.galeria.marcados
+        self.btn_marcar.set_label("Quitar de la descarga" if marcado else "Marcar para descargar")
+
+    def _on_marcar(self, *_):
+        self.galeria.marcar(self.it, self.it["id"] not in self.galeria.marcados)
+        self._texto_marcar()
+
+    def _cargar(self):
+        try:
+            if self.it.get("animado"):
+                ruta = _archivo_animado(self.it, completo=True)
+            else:
+                ruta = CACHE_GALERIA / f"{self.it['id']}-grande.jpg"
+                if not ruta.exists():
+                    _http(self.it["previa"], ruta, timeout=60)
+            GLib.idle_add(self._mostrar, str(ruta))
+        except Exception as exc:  # noqa: BLE001
+            GLib.idle_add(lambda: (self.info.set_text(f"{self._datos_info} · no se pudo cargar ({exc})"), False)[1])
+
+    def _mostrar(self, ruta):
+        if not self.vivo:
+            return False
+        try:
+            gi.require_version("GdkPixbuf", "2.0")
+            from gi.repository import GdkPixbuf
+            anim = GdkPixbuf.PixbufAnimation.new_from_file(ruta)
+            if anim.is_static_image():
+                self.imagen.set_paintable(Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
+            else:
+                self.iterador = anim.get_iter(None)
+                self._fotograma()
+            self.info.set_text(self._datos_info + (" · reproduciendo" if self.iterador else ""))
+        except Exception:
+            try:
+                self.imagen.set_paintable(Gdk.Texture.new_from_filename(ruta))
+                self.info.set_text(self._datos_info)
+            except Exception:
+                self.info.set_text(self._datos_info + " · no se pudo mostrar")
+        return False
+
+    def _fotograma(self):
+        if not self.vivo or self.iterador is None:
+            return False
+        try:
+            self.imagen.set_paintable(Gdk.Texture.new_for_pixbuf(self.iterador.get_pixbuf()))
+            espera = self.iterador.get_delay_time()
+            self.iterador.advance(None)
+        except Exception:
+            return False
+        if espera is None or espera < 0:
+            return False
+        GLib.timeout_add(max(20, espera), self._fotograma)
+        return False
+
+
+class GaleriaPanel(Gtk.Box):
+    """Galería dentro de la pestaña Fondos: elegir fondos (HD o animados) y bajarlos."""
+
+    POR_PAGINA = 24
+    ORDENES = (("Populares", "toplist"), ("Aleatorios", "random"), ("Recientes", "date_added"))
+    TIPOS = (("General y anime", "110"), ("Solo general", "100"), ("Solo anime", "010"))
+
+    def __init__(self, padre, al_volver):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add_css_class("pagina")
+        self.padre = padre
+        self.al_volver = al_volver
+        self.fuente = "animados" if os.environ.get("TEMAS_GALERIA") == "animados" else "hd"
+        self.pagina = 1
+        self.semilla = None
+        self.generacion = 0
+        self.iniciada = False
+        self.descargados = 0
+        self.marcados = {}
+        self.tarjetas = {}
+        self.animados = None
+        self.previa = None
+        self.cola = queue.Queue()
+        for _ in range(4):
+            threading.Thread(target=self._trabajador, daemon=True).start()
+
+        barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        barra.add_css_class("page-toolbar")
+        volver = Gtk.Button(label="← Mis fondos")
+        volver.add_css_class("flat")
+        volver.set_tooltip_text("Volver a tus fondos")
+        volver.connect("clicked", lambda *_: self.al_volver(self.descargados))
+        barra.append(volver)
+        grupo = None
+        self.botones_fuente = {}
+        for clave, rotulo in (("hd", "Fondos HD"), ("animados", "Animados")):
+            b = Gtk.ToggleButton(label=rotulo)
+            b.add_css_class("chip-carpeta")
+            if grupo is None:
+                grupo = b
+            else:
+                b.set_group(grupo)
+            b.set_active(clave == self.fuente)
+            b.connect("toggled", self._on_fuente, clave)
+            barra.append(b)
+            self.botones_fuente[clave] = b
+        self.busqueda = Gtk.SearchEntry(placeholder_text="Buscar (en inglés: mountain, anime, city, space…)")
+        self.busqueda.set_hexpand(True)
+        self.busqueda.connect("activate", lambda *_: self.recargar())
+        barra.append(self.busqueda)
+        self.orden = Gtk.DropDown.new_from_strings([o[0] for o in self.ORDENES])
+        self.orden.connect("notify::selected", lambda *_: self.recargar() if self.iniciada else None)
+        barra.append(self.orden)
+        self.tipo = Gtk.DropDown.new_from_strings([t[0] for t in self.TIPOS])
+        self.tipo.connect("notify::selected", lambda *_: self.recargar() if self.iniciada else None)
+        barra.append(self.tipo)
+        self.append(barra)
+
+        self.ayuda = Gtk.Label()
+        self.ayuda.set_xalign(0)
+        self.ayuda.set_wrap(True)
+        self.ayuda.add_css_class("seccion-sub")
+        self.append(self.ayuda)
+
+        self.flujo = Gtk.FlowBox()
+        self.flujo.set_valign(Gtk.Align.START)
+        self.flujo.set_homogeneous(True)
+        self.flujo.set_max_children_per_line(4)
+        self.flujo.set_min_children_per_line(2)
+        self.flujo.set_selection_mode(Gtk.SelectionMode.NONE)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(self.flujo, f"set_margin_{m}")(14)
+        self.flujo.set_row_spacing(12)
+        self.flujo.set_column_spacing(12)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_child(self.flujo)
+        self.vista = Gtk.Stack()
+        self.vista.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.vista.set_vexpand(True)
+        self.vista.add_named(scroll, "rejilla")
+        self.append(self.vista)
+
+        pie = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        pie.add_css_class("page-footer")
+        self.estado = Gtk.Label(label="")
+        self.estado.set_xalign(0)
+        self.estado.set_hexpand(True)
+        self.estado.set_ellipsize(3)
+        self.estado.add_css_class("page-footer-text")
+        pie.append(self.estado)
+        self.btn_mas = Gtk.Button(label="Cargar más")
+        self.btn_mas.add_css_class("flat")
+        self.btn_mas.connect("clicked", lambda *_: self.cargar_pagina())
+        pie.append(self.btn_mas)
+        self.btn_descargar = Gtk.Button(label="Descargar seleccionados (0)")
+        self.btn_descargar.add_css_class("store-instalar")
+        self.btn_descargar.add_css_class("suggested-action")
+        self.btn_descargar.set_sensitive(False)
+        self.btn_descargar.connect("clicked", self.descargar)
+        pie.append(self.btn_descargar)
+        self.append(pie)
+
+    def activar(self):
+        """Se llama al abrir la galería: la primera vez carga los fondos."""
+        self.descargados = 0
+        if not self.iniciada:
+            self.iniciada = True
+            self.recargar()
+
+    # ── carga ───────────────────────────────────────────────────────────────
+    def _on_fuente(self, boton, clave):
+        if boton.get_active() and clave != self.fuente:
+            self.fuente = clave
+            if self.iniciada:
+                self.recargar()
+
+    def recargar(self):
+        self.cerrar_previa()
+        self.generacion += 1
+        self.pagina = 1
+        self.semilla = None
+        while (h := self.flujo.get_first_child()) is not None:
+            self.flujo.remove(h)
+        self.tarjetas.clear()
+        hd = self.fuente == "hd"
+        self.orden.set_visible(hd)
+        self.tipo.set_visible(hd)
+        if hd:
+            self.ayuda.set_text("Fondos de Wallhaven en 2560×1440 o más (16:9), solo aptos para todos. "
+                                "Pulsa una imagen para verla grande y marca la casilla de las que quieras.")
+        else:
+            self.ayuda.set_text("Fondos animados (GIF/WebP) de colecciones públicas. Pulsa uno para verlo "
+                                "en movimiento. El tamaño de cada archivo sale antes de bajarlo.")
+        self.cargar_pagina()
+
+    def cargar_pagina(self):
+        gen = self.generacion
+        self.btn_mas.set_sensitive(False)
+        self.estado.set_text("Buscando fondos…")
+        texto = self.busqueda.get_text().strip()
+        fuente = self.fuente
+        orden = self.ORDENES[self.orden.get_selected()][1]
+        tipo = self.TIPOS[self.tipo.get_selected()][1]
+        pagina = self.pagina
+
+        def trabajo():
+            nuevos, hay_mas, error = [], False, ""
+            try:
+                if fuente == "hd":
+                    params = {"q": f"{texto} {WALLHAVEN_EXCLUIR}".strip(), "purity": "100",
+                              "categories": tipo, "sorting": orden, "atleast": "2560x1440",
+                              "ratios": "16x9", "page": str(pagina)}
+                    if orden == "random" and self.semilla:
+                        params["seed"] = self.semilla
+                    datos = json.loads(_http(WALLHAVEN + "?" + urllib.parse.urlencode(params), timeout=30))
+                    meta = datos.get("meta") or {}
+                    self.semilla = meta.get("seed") or self.semilla
+                    hay_mas = int(meta.get("current_page") or 1) < int(meta.get("last_page") or 1)
+                    for d in datos.get("data", []):
+                        if d.get("purity") != "sfw":
+                            continue
+                        ext = Path(d.get("path", "")).suffix.lower() or ".jpg"
+                        nuevos.append({
+                            "id": "wh-" + d["id"], "animado": False, "nombre": f"Wallhaven {d['id']}",
+                            "url": d["path"], "ext": ext, "tam": int(d.get("file_size") or 0),
+                            "res": d.get("resolution", ""), "miniatura": d["thumbs"]["small"],
+                            "previa": d["thumbs"]["large"], "repo": "wallhaven.cc",
+                        })
+                else:
+                    if self.animados is None:
+                        self.animados = lista_animados()
+                    lista = [a for a in self.animados
+                             if not texto or texto.lower() in (a["nombre"] + " " + a["repo"]).lower()]
+                    ini = (pagina - 1) * self.POR_PAGINA
+                    nuevos = lista[ini:ini + self.POR_PAGINA]
+                    hay_mas = len(lista) > ini + self.POR_PAGINA
+            except Exception as exc:  # noqa: BLE001
+                error = str(exc)
+            GLib.idle_add(self._pintar, gen, nuevos, hay_mas, error)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _pintar(self, gen, nuevos, hay_mas, error):
+        if gen != self.generacion:
+            return False
+        if error:
+            self.estado.set_text(f"No pude cargar la galería: {error}")
+            self.btn_mas.set_sensitive(True)
+            return False
+        for it in nuevos:
+            caja, imagen = self._tarjeta(it)
+            self.flujo.append(caja)
+            self.cola.put((gen, it, imagen))
+        self.pagina += 1
+        self.btn_mas.set_sensitive(hay_mas)
+        n = len(self.tarjetas)
+        self.estado.set_text(f"{n} fondos a la vista" + (" · «Cargar más» para ver otros" if hay_mas else "")
+                             if n else "No hay resultados con esa búsqueda.")
+        return False
+
+    def _trabajador(self):
+        while True:
+            gen, it, imagen = self.cola.get()
+            if gen != self.generacion:
+                continue
+            ruta = miniatura_galeria(it)
+            if ruta and gen == self.generacion:
+                GLib.idle_add(self._poner_miniatura, imagen, str(ruta))
+
+    @staticmethod
+    def _poner_miniatura(imagen, ruta):
+        try:
+            imagen.set_paintable(Gdk.Texture.new_from_filename(ruta))
+        except Exception:
+            pass
+        return False
+
+    def _tarjeta(self, it):
+        caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        caja.add_css_class("store-card")
+        capa = Gtk.Overlay()
+        imagen = Gtk.Picture.new_for_paintable(None)
+        imagen.set_content_fit(Gtk.ContentFit.COVER)
+        imagen.set_can_shrink(True)
+        imagen.set_hexpand(True)
+        imagen.set_size_request(250, 140)
+        clic = Gtk.GestureClick()
+        clic.connect("released", lambda *_, i=it: self.previsualizar(i))
+        imagen.add_controller(clic)
+        imagen.set_cursor_from_name("pointer")
+        imagen.set_tooltip_text("Pulsa para verlo en grande")
+        capa.set_child(imagen)
+        check = Gtk.CheckButton()
+        check.set_halign(Gtk.Align.END)
+        check.set_valign(Gtk.Align.START)
+        check.add_css_class("galeria-check")
+        check.set_tooltip_text("Marcar para descargar")
+        check.set_active(it["id"] in self.marcados)
+        check.connect("toggled", lambda b, i=it: self.marcar(i, b.get_active()))
+        capa.add_overlay(check)
+        chip = Gtk.Label(label=_tam_legible(it["tam"]) + (" · animado" if it.get("animado") else ""))
+        chip.set_halign(Gtk.Align.START)
+        chip.set_valign(Gtk.Align.END)
+        chip.add_css_class("galeria-tam")
+        capa.add_overlay(chip)
+        marco = Gtk.Frame()
+        marco.add_css_class("store-banner")
+        marco.set_overflow(Gtk.Overflow.HIDDEN)
+        marco.set_child(capa)
+        caja.append(marco)
+
+        nombre = Gtk.Label(label=it["nombre"])
+        nombre.set_xalign(0)
+        nombre.set_ellipsize(3)
+        nombre.add_css_class("store-title")
+        caja.append(nombre)
+        sub = Gtk.Label(label=" · ".join(x for x in (it.get("res"), it.get("repo")) if x))
+        sub.set_xalign(0)
+        sub.set_ellipsize(3)
+        sub.add_css_class("store-desc")
+        caja.append(sub)
+        if it["id"] in self.marcados:
+            caja.add_css_class("galeria-marcada")
+        self.tarjetas[it["id"]] = (caja, check)
+        return caja, imagen
+
+    def previsualizar(self, it):
+        self.cerrar_previa()
+        self.previa = PreviaPanel(self, it)
+        self.vista.add_named(self.previa, "previa")
+        self.vista.set_visible_child_name("previa")
+
+    def cerrar_previa(self):
+        if self.previa is not None:
+            self.previa.parar()
+            self.vista.set_visible_child_name("rejilla")
+            self.vista.remove(self.previa)
+            self.previa = None
+
+    def marcar(self, it, activo):
+        if activo:
+            self.marcados[it["id"]] = it
+        else:
+            self.marcados.pop(it["id"], None)
+        caja, check = self.tarjetas.get(it["id"], (None, None))
+        if caja is not None:
+            (caja.add_css_class if activo else caja.remove_css_class)("galeria-marcada")
+            if check.get_active() != activo:
+                check.set_active(activo)
+        self._actualizar_boton()
+
+    def _actualizar_boton(self):
+        n = len(self.marcados)
+        total = sum(i["tam"] for i in self.marcados.values())
+        self.btn_descargar.set_label(f"Descargar seleccionados ({n})" + (f" · {_tam_legible(total)}" if n else ""))
+        self.btn_descargar.set_sensitive(n > 0)
+
+    # ── descarga ────────────────────────────────────────────────────────────
+    def descargar(self, *_):
+        elegidos = list(self.marcados.values())
+        if not elegidos:
+            return
+        self.btn_descargar.set_sensitive(False)
+
+        def trabajo():
+            hechos = 0
+            for k, it in enumerate(elegidos, start=1):
+                GLib.idle_add(self.estado.set_text,
+                              f"Descargando {k} de {len(elegidos)}: {it['nombre']} ({_tam_legible(it['tam'])})…")
+                try:
+                    if it.get("animado"):
+                        carpeta = ANIMADOS
+                        base = re.sub(r"[^\w\- ]+", "", it["nombre"]).strip().replace(" ", "-") or it["id"]
+                        destino = carpeta / f"{base}{it['ext']}"
+                        if destino.exists() and destino.stat().st_size != it["tam"]:
+                            destino = carpeta / f"{base}-{it['id'][-6:]}{it['ext']}"
+                        nombre = f"Animado: {it['nombre']}"
+                    else:
+                        carpeta = DESCARGAS
+                        destino = carpeta / f"wallhaven-{it['id'][3:]}{it['ext']}"
+                        nombre = f"HD {it['id'][3:]}"
+                    carpeta.mkdir(parents=True, exist_ok=True)
+                    if not destino.exists():
+                        cache = CACHE_GALERIA / f"{it['id']}{it['ext']}"
+                        if cache.exists() and cache.stat().st_size >= it["tam"] > 0:
+                            shutil.copy2(cache, destino)
+                        else:
+                            _http(it["url"], destino, timeout=600)
+                    if not destino.exists() or destino.stat().st_size < 10000:
+                        continue
+                    texto = LISTA.read_text(encoding="utf-8", errors="replace") if LISTA.exists() else ""
+                    if str(destino) not in texto:
+                        with LISTA.open("a", encoding="utf-8") as fh:
+                            if texto and not texto.endswith("\n"):
+                                fh.write("\n")
+                            fh.write(f"{nombre}|{destino}|{ICONO_POR_DEFECTO}\n")
+                    hechos += 1
+                except Exception:
+                    continue
+            GLib.idle_add(self._fin_descarga, hechos, len(elegidos))
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _fin_descarga(self, hechos, total):
+        for ident in list(self.marcados):
+            self.marcar(self.marcados[ident], False)
+        self.descargados += hechos
+        self.estado.set_text(f"Listo: {hechos} de {total} fondos descargados y añadidos a tu lista "
+                             "(HD en Descargados, animados en Animados). «← Mis fondos» para verlos.")
+        try:
+            self.padre.cargar()
+        except Exception:
+            pass
+        return False
 
 
 # ────────────────────────────── descarga ────────────────────────────────────
@@ -2978,6 +4622,21 @@ class App(Gtk.Application):
         if self.ventana is None:
             self.ventana = Ventana(self)
         self.ventana.present()
+        # Ventana opaca: el escritorio vuelve semitransparentes las ventanas y
+        # se leía el texto de lo que hay detrás. Se pide solo para HyprBazar.
+        GLib.timeout_add(600, _hacer_opaca)
+
+
+def _hacer_opaca():
+    orden = r"""A=$(hyprctl clients -j | python3 -c "import json,sys
+for c in json.load(sys.stdin):
+    if c['class'] in ('es.david.HyprBazar','hyprbazar') or c.get('pid')==%d: print(c['address'])")
+for a in $A; do hyprctl eval "hl.dispatch(hl.dsp.window.set_prop({ window = 'address:$a', prop = 'opaque', value = '1' }))" >/dev/null; done""" % os.getpid()
+    try:
+        subprocess.Popen(["sh", "-c", orden], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+    return False
 
 
 def main():
