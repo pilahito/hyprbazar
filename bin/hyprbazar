@@ -5162,11 +5162,31 @@ class App(Gtk.Application):
     def do_activate(self):
         if self.ventana is None:
             self.ventana = Ventana(self)
+        else:
+            # si estaba minimizada (escritorio especial «minimized»), traerla al escritorio activo
+            GLib.idle_add(_traer_al_escritorio_activo)
         self.ventana.present()
         # Ventana opaca: el escritorio vuelve semitransparentes las ventanas y
         # se leía el texto de lo que hay detrás. Se pide solo para HyprBazar.
         GLib.timeout_add(600, _hacer_opaca)
 
+
+
+def _traer_al_escritorio_activo():
+    """Saca la ventana de HyprBazar de los escritorios especiales (minimizada) y la enfoca."""
+    try:
+        clientes = json.loads(subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True, timeout=3).stdout or "[]")
+        activo = json.loads(subprocess.run(["hyprctl", "activeworkspace", "-j"], capture_output=True, text=True, timeout=3).stdout or "{}")
+    except Exception:
+        return False
+    destino = str(activo.get("id", 1))
+    for c in clientes:
+        if c.get("class") == "es.david.HyprBazar" and str(c.get("workspace", {}).get("name", "")).startswith("special:"):
+            adr = c.get("address", "")
+            subprocess.run(["hyprctl", "dispatch", f'hl.dsp.window.move({{ window = "address:{adr}", workspace = "{destino}", follow = false }})'],
+                           capture_output=True, timeout=3)
+            subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{adr}" }})'], capture_output=True, timeout=3)
+    return False
 
 def _hacer_opaca():
     orden = r"""A=$(hyprctl clients -j | python3 -c "import json,sys
