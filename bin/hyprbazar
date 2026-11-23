@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import os
+import unicodedata
 import random
 import shutil
 import subprocess
@@ -96,8 +97,18 @@ window, .background, .pagina { background-color: @window_bg_color; }
   transition: background 120ms ease-in-out;
 }
 .wall-card:hover { background: alpha(currentColor, 0.10); }
-.chip-carpeta { border-radius: 999px; padding: 2px 12px; font-weight: 600; }
-.chip-carpeta:checked { background: alpha(@accent_bg_color, 0.35); }
+.chip-carpeta { border-radius: 999px; padding: 4px 12px 4px 10px; font-weight: 600; }
+.chip-carpeta:checked { background: @accent_bg_color; color: @accent_fg_color; }
+.chip-cuenta {
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 0.78em;
+  font-weight: 700;
+  background: alpha(currentColor, 0.12);
+}
+.fila-chips { padding: 2px 20px 10px 20px; }
+.hb-acciones { border-radius: 999px; padding: 3px; }
+.menu-fondos-item { border-radius: 10px; min-width: 200px; padding: 6px 10px; }
 .galeria-check { margin: 8px; background: alpha(black, 0.45); border-radius: 999px; padding: 2px 4px; }
 .galeria-marcada { box-shadow: inset 0 0 0 3px @accent_bg_color; }
 .galeria-tam { background: alpha(black, 0.55); color: white; border-radius: 999px;
@@ -295,6 +306,80 @@ entry image { color: %(on_surface_variant)s; }
   border-color: transparent;
 }
 
+/* chips de carpetas en Fondos: misma pastilla que la Tienda, acento al seleccionar */
+button.flat.chip-carpeta {
+  border-radius: 999px;
+  padding: 4px 12px 4px 10px;
+  border: 1px solid alpha(%(outline_variant)s, 0.9);
+  color: %(on_surface_variant)s;
+  font-weight: 600;
+  min-height: 32px;
+  background: none;
+  box-shadow: none;
+}
+button.flat.chip-carpeta:hover {
+  border-color: %(primary)s;
+  color: %(primary)s;
+  background: alpha(%(primary)s, 0.08);
+}
+button.flat.chip-carpeta:checked,
+button.flat.chip-carpeta:checked:hover {
+  background: %(primary)s;
+  color: %(on_primary)s;
+  border-color: transparent;
+}
+.chip-cuenta {
+  background: alpha(%(on_surface)s, 0.10);
+  color: %(on_surface)s;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 0.78em;
+  font-weight: 700;
+  min-width: 1.2em;
+}
+button.flat.chip-carpeta:checked .chip-cuenta,
+button.flat.chip-carpeta:checked:hover .chip-cuenta {
+  background: alpha(%(on_primary)s, 0.22);
+  color: %(on_primary)s;
+}
+.fila-chips { padding: 2px 20px 10px 20px; }
+scrolledwindow.fila-chips-scroll { min-height: 0; min-width: 0; }
+scrolledwindow.fila-chips-scroll scrollbar { min-height: 0; min-width: 0; opacity: 0; }
+.hb-chips-flechas button,
+.hb-chips-flechas button.flat {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 999px;
+}
+.hb-chips-flechas button:disabled { opacity: 0.3; }
+
+/* grupo de iconos de Fondos, mismo lenguaje que el selector de pestañas */
+.hb-acciones {
+  background: %(surface_container_high)s;
+  border-radius: 999px;
+  padding: 3px;
+}
+.hb-acciones button,
+.hb-acciones menubutton > button {
+  border-radius: 999px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0 8px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: %(on_surface_variant)s;
+}
+.hb-acciones button:hover,
+.hb-acciones menubutton > button:hover {
+  background: alpha(%(on_surface)s, 0.07);
+  color: %(on_surface)s;
+}
+.search-fondos { min-width: 260px; }
+.menu-fondos-item { border-radius: 10px; min-width: 220px; padding: 6px 10px; }
+.menu-fondos-item:hover { background: alpha(%(primary)s, 0.12); color: %(primary)s; }
+
 /* temas de color */
 button.paleta-tarjeta {
   background: %(surface_container)s;
@@ -455,6 +540,39 @@ def categoria_fondo(ruta):
     return rel.parts[0] if len(rel.parts) > 1 else "Sueltos"
 
 
+def _clave_carpeta(nombre):
+    """Nombre de carpeta en minúsculas y sin tildes, para buscar el icono."""
+    return "".join(
+        c for c in unicodedata.normalize("NFD", nombre or "")
+        if unicodedata.category(c) != "Mn"
+    ).lower()
+
+
+ICONOS_CARPETA = {
+    "mi lista": ("view-list-symbolic", "emblem-favorite-symbolic", "starred-symbolic"),
+    "todas": ("view-grid-symbolic", "image-x-generic-symbolic"),
+    "animados": ("video-x-generic-symbolic", "media-playback-start-symbolic"),
+    "anime": ("image-x-generic-symbolic", "folder-pictures-symbolic"),
+    "ciudad": ("mark-location-symbolic", "find-location-symbolic", "folder-symbolic"),
+    "comunidad": ("system-users-symbolic", "avatar-default-symbolic"),
+    "descargados": ("browser-download-symbolic", "folder-download-symbolic", "document-save-symbolic"),
+    "espacio": ("weather-clear-night-symbolic", "weather-clear-symbolic"),
+    "fantasia": ("applications-games-symbolic", "preferences-desktop-screensaver-symbolic"),
+    "lofi": ("audio-headphones-symbolic", "audio-x-generic-symbolic"),
+    "minimalistas": ("view-paged-symbolic", "computer-symbolic", "preferences-desktop-symbolic"),
+    "naturaleza": ("weather-few-clouds-symbolic", "folder-pictures-symbolic"),
+    "temas": ("preferences-desktop-theme-symbolic", "applications-graphics-symbolic"),
+    "otros": ("folder-symbolic",),
+    "sueltos": ("folder-symbolic",),
+}
+
+
+def icono_carpeta(nombre):
+    """Icono simbólico de una pastilla de carpeta."""
+    return icono_disponible(*ICONOS_CARPETA.get(
+        _clave_carpeta(nombre), ("folder-symbolic",)))
+
+
 # ────────────────────────────── datos ───────────────────────────────────────
 def leer_temas():
     """Lista de temas en el MISMO orden que usa cambiar-tema.sh (1..N)."""
@@ -611,40 +729,111 @@ class Ventana(Gtk.ApplicationWindow):
         self.set_titlebar(cabecera)
 
         # ── barra de herramientas: buscar + acciones ──
-        barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         barra.add_css_class("page-toolbar")
 
         self.busqueda = Gtk.SearchEntry(placeholder_text="Buscar fondo…")
-        self.busqueda.set_hexpand(True)
+        self.busqueda.add_css_class("search-fondos")
+        self.busqueda.set_hexpand(False)
+        self.busqueda.set_size_request(280, -1)
+        self.busqueda.set_valign(Gtk.Align.CENTER)
         self.busqueda.connect("search-changed", lambda *_: self.filtrar())
         barra.append(self.busqueda)
 
-        def boton(texto, tooltip, accion, clase=None):
-            b = Gtk.Button(label=texto)
+        hueco = Gtk.Box()
+        hueco.set_hexpand(True)
+        barra.append(hueco)
+
+        acciones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        acciones.add_css_class("hb-acciones")
+        acciones.add_css_class("linked")
+        acciones.set_valign(Gtk.Align.CENTER)
+
+        def boton_icono(iconos, tooltip, accion):
+            b = Gtk.Button()
+            b.set_icon_name(icono_disponible(*iconos))
             b.set_tooltip_text(tooltip)
+            b.add_css_class("flat")
             b.connect("clicked", lambda *_: accion())
-            if clase:
-                b.add_css_class(clase)
-            barra.append(b)
+            acciones.append(b)
             return b
 
-        self.btn_biblioteca = boton(
-            "Biblioteca", "Ver todos los fondos de tu carpeta de fondos", self.on_biblioteca, "flat")
-        if self.modo == "biblioteca":
-            self.btn_biblioteca.set_label("Volver a temas")
-        self.btn_carpeta = Gtk.Button()
-        self.btn_carpeta.set_tooltip_text(
-            "Carpeta de fondos que se está usando · pulsa para cambiarla")
-        self.btn_carpeta.add_css_class("flat")
-        self.btn_carpeta.connect("clicked", lambda *_: self.on_elegir_carpeta())
-        barra.append(self.btn_carpeta)
+        self.btn_biblioteca = boton_icono(
+            ("go-previous-symbolic", "go-home-symbolic"),
+            "Volver a temas",
+            self.on_biblioteca,
+        )
+        self.btn_carpeta = boton_icono(
+            ("folder-symbolic", "folder-open-symbolic"),
+            "Carpeta de fondos que se está usando · pulsa para cambiarla",
+            self.on_elegir_carpeta,
+        )
+        boton_icono(
+            ("media-playlist-shuffle-symbolic", "view-refresh-symbolic"),
+            "Aplica un fondo al azar",
+            self.on_aleatorio,
+        )
+
+        self.popover_fondos = Gtk.Popover()
+        caja_menu = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(caja_menu, f"set_margin_{m}")(6)
+
+        def item_menu(iconos, texto, accion):
+            b = Gtk.Button()
+            fila = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            img = Gtk.Image.new_from_icon_name(icono_disponible(*iconos))
+            fila.append(img)
+            lab = Gtk.Label(label=texto)
+            lab.set_xalign(0)
+            lab.set_hexpand(True)
+            fila.append(lab)
+            b.set_child(fila)
+            b.add_css_class("flat")
+            b.add_css_class("menu-fondos-item")
+
+            def _run(*_):
+                self.popover_fondos.popdown()
+                accion()
+
+            b.connect("clicked", _run)
+            caja_menu.append(b)
+            return b, lab, img
+
+        item_menu(("view-refresh-symbolic",), "Recargar", self.cargar)
+        item_menu(("list-add-symbolic", "document-new-symbolic"),
+                  "Añadir fondo…", self.on_anadir)
+        item_menu(("folder-open-symbolic", "folder-symbolic"),
+                  "Cambiar carpeta…", self.on_elegir_carpeta)
+        self.item_menu_biblioteca, self._lbl_menu_biblioteca, self._icono_menu_biblioteca = item_menu(
+            ("go-previous-symbolic", "view-grid-symbolic"),
+            "Volver a temas",
+            self.on_biblioteca,
+        )
+
+        self.popover_fondos.set_child(caja_menu)
+        btn_menu = Gtk.MenuButton()
+        btn_menu.set_icon_name(icono_disponible("view-more-symbolic", "open-menu-symbolic"))
+        btn_menu.set_tooltip_text("Más acciones")
+        btn_menu.set_popover(self.popover_fondos)
+        btn_menu.add_css_class("flat")
+        try:
+            btn_menu.set_has_frame(False)
+        except Exception:
+            pass
+        acciones.append(btn_menu)
+        barra.append(acciones)
+
+        self.btn_descargar = Gtk.Button(label="Descargar")
+        self.btn_descargar.set_tooltip_text(
+            "Abre la galería: elige fondos (también animados) y descarga solo los que marques")
+        self.btn_descargar.add_css_class("suggested-action")
+        self.btn_descargar.set_valign(Gtk.Align.CENTER)
+        self.btn_descargar.connect("clicked", lambda *_: self.on_descargar())
+        barra.append(self.btn_descargar)
+
         self.actualizar_btn_carpeta()
-        boton("Aleatorio", "Aplica un fondo al azar", self.on_aleatorio, "flat")
-        boton("Recargar", "Vuelve a leer la lista y regenera las miniaturas",
-              lambda: self.cargar(), "flat")
-        boton("Añadir…", "Añade un fondo que ya tengas en el equipo", self.on_anadir, "flat")
-        boton("Descargar", "Abre la galería: elige fondos (también animados) y descarga solo los que marques",
-              self.on_descargar, "suggested-action")
+        self._actualizar_btn_biblioteca()
 
         # ── pie: cuántos hay y cuál está puesto ──
         self.estado = Gtk.Label(label="")
@@ -671,17 +860,53 @@ class Ventana(Gtk.ApplicationWindow):
         scroll.set_vexpand(True)
         scroll.set_child(self.flujo)
 
-        # chips de carpetas (Todas, Anime, Ciudad…): se rellenan al cargar
+        # chips de carpetas: «Mi lista» y «Todas» fijas; el resto se desplaza
         self.categoria = "Todas"
-        self.fila_chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.fila_chips.add_css_class("page-toolbar")
-        scroll_chips = Gtk.ScrolledWindow()
-        scroll_chips.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
-        scroll_chips.set_child(self.fila_chips)
+        self.fila_chips_fijos = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.fila_chips_fijos.set_valign(Gtk.Align.CENTER)
+        self.fila_chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.fila_chips.set_valign(Gtk.Align.CENTER)
+        self.fila_chips.set_hexpand(False)
+        self.scroll_chips = Gtk.ScrolledWindow()
+        self.scroll_chips.add_css_class("fila-chips-scroll")
+        self.scroll_chips.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        self.scroll_chips.set_overlay_scrolling(True)
+        self.scroll_chips.set_propagate_natural_height(True)
+        self.scroll_chips.set_hexpand(True)
+        self.scroll_chips.set_halign(Gtk.Align.FILL)
+        self.scroll_chips.set_size_request(1, -1)
+        self.scroll_chips.set_child(self.fila_chips)
+        flechas = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        flechas.add_css_class("hb-chips-flechas")
+        flechas.set_valign(Gtk.Align.CENTER)
+
+        def flecha(iconos, tooltip, direccion):
+            b = Gtk.Button()
+            b.set_icon_name(icono_disponible(*iconos))
+            b.set_tooltip_text(tooltip)
+            b.add_css_class("flat")
+            b.connect("clicked", lambda *_, d=direccion: self._desplazar_chips(d))
+            flechas.append(b)
+            return b
+
+        self.btn_chips_izq = flecha(
+            ("go-previous-symbolic", "pan-start-symbolic"),
+            "Ver carpetas anteriores", -1)
+        self.btn_chips_der = flecha(
+            ("go-next-symbolic", "pan-end-symbolic"),
+            "Ver más carpetas", 1)
+        adj = self.scroll_chips.get_hadjustment()
+        adj.connect("value-changed", lambda *_: self._actualizar_flechas_chips())
+        adj.connect("changed", lambda *_: self._actualizar_flechas_chips())
+        fila_filtros = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        fila_filtros.add_css_class("fila-chips")
+        fila_filtros.append(self.fila_chips_fijos)
+        fila_filtros.append(self.scroll_chips)
+        fila_filtros.append(flechas)
 
         raiz = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         raiz.append(barra)
-        raiz.append(scroll_chips)
+        raiz.append(fila_filtros)
         raiz.append(scroll)
         raiz.append(pie)
         # la galería vive DENTRO de la pestaña Fondos (sin ventana aparte)
@@ -841,10 +1066,33 @@ class Ventana(Gtk.ApplicationWindow):
 
     def actualizar_btn_carpeta(self):
         try:
-            nombre = self.carpeta_biblioteca().name
+            ruta = self.carpeta_biblioteca()
+            nombre = ruta.name
+            donde = str(ruta)
         except Exception:
             nombre = "Wallpapers"
-        self.btn_carpeta.set_label(f"📁 {nombre}")
+            donde = nombre
+        self.btn_carpeta.set_icon_name(
+            icono_disponible("folder-symbolic", "folder-open-symbolic"))
+        self.btn_carpeta.set_tooltip_text(
+            f"Carpeta actual: {nombre} ({donde}) · pulsa para cambiarla")
+
+    def _actualizar_btn_biblioteca(self):
+        """Icono, tooltip y entrada del menú según se vea la biblioteca o Mi lista."""
+        if getattr(self, "modo", "biblioteca") == "biblioteca":
+            icono = icono_disponible("go-previous-symbolic", "go-home-symbolic")
+            texto = "Volver a temas"
+            ayuda = "Volver a tu lista de temas"
+        else:
+            icono = icono_disponible("view-grid-symbolic", "image-x-generic-symbolic")
+            texto = "Biblioteca"
+            ayuda = "Ver todos los fondos de tu carpeta de fondos"
+        self.btn_biblioteca.set_icon_name(icono)
+        self.btn_biblioteca.set_tooltip_text(ayuda)
+        if getattr(self, "_lbl_menu_biblioteca", None) is not None:
+            self._lbl_menu_biblioteca.set_text(texto)
+        if getattr(self, "_icono_menu_biblioteca", None) is not None:
+            self._icono_menu_biblioteca.set_from_icon_name(icono)
 
     def cargar_biblioteca(self):
         """Rejilla con TODOS los fondos de la carpeta elegida."""
@@ -865,7 +1113,7 @@ class Ventana(Gtk.ApplicationWindow):
         if not self.fondos_biblioteca:
             self.estado.set_text(
                 f"No hay imágenes en {carpeta}. Usa «Otra carpeta…» para elegir otra.")
-            self.btn_biblioteca.set_label("Volver a temas")
+            self._actualizar_btn_biblioteca()
             return
 
         for ruta in self.fondos_biblioteca:
@@ -993,12 +1241,8 @@ class Ventana(Gtk.ApplicationWindow):
         return False
 
     def on_biblioteca(self, *_):
-        if self.modo == "temas":
-            self.modo = "biblioteca"
-            self.btn_biblioteca.set_label("Volver a temas")
-        else:
-            self.modo = "temas"
-            self.btn_biblioteca.set_label("Biblioteca")
+        self.modo = "biblioteca" if self.modo == "temas" else "temas"
+        self._actualizar_btn_biblioteca()
         self.busqueda.set_text("")
         self.actualizar_btn_carpeta()
         self.cargar()
@@ -1018,7 +1262,7 @@ class Ventana(Gtk.ApplicationWindow):
             CONFIG_BIBLIOTECA.write_text(
                 json.dumps({"carpeta": f.get_path()}, indent=1), encoding="utf-8")
             self.modo = "biblioteca"
-            self.btn_biblioteca.set_label("Volver a temas")
+            self._actualizar_btn_biblioteca()
             self.actualizar_btn_carpeta()
             self.cargar()
 
@@ -1205,12 +1449,32 @@ class Ventana(Gtk.ApplicationWindow):
                     salida.append(str(Path(raiz) / nombre))
         return sorted(salida, key=lambda r: Path(r).name.lower())
 
+    def _desplazar_chips(self, direccion):
+        """Desplaza la fila de carpetas un tramo a izquierda (-1) o derecha (1)."""
+        adj = self.scroll_chips.get_hadjustment()
+        paso = max(180, adj.get_page_size() * 0.7)
+        adj.set_value(max(adj.get_lower(), min(adj.get_upper() - adj.get_page_size(),
+                                               adj.get_value() + direccion * paso)))
+
+    def _actualizar_flechas_chips(self):
+        adj = self.scroll_chips.get_hadjustment()
+        overflow = adj.get_upper() - adj.get_page_size() > 2
+        self.btn_chips_izq.set_sensitive(overflow and adj.get_value() > 1)
+        self.btn_chips_der.set_sensitive(overflow and adj.get_value() < adj.get_upper() - adj.get_page_size() - 1)
+        self.btn_chips_izq.set_visible(overflow)
+        self.btn_chips_der.set_visible(overflow)
+        self.btn_chips_izq.get_parent().set_visible(overflow)
+
     def _pintar_chips(self, _rutas=None):
         """Pastillas: «Mi lista» (temas.txt), «Todas» y una por subcarpeta,
         con el número REAL de archivos de cada carpeta de Wallpapers."""
         self._pintando_chips = True
         while (h := self.fila_chips.get_first_child()) is not None:
             self.fila_chips.remove(h)
+        fijos = getattr(self, "fila_chips_fijos", None)
+        if fijos is not None:
+            while (h := fijos.get_first_child()) is not None:
+                fijos.remove(h)
         todos = self._escanear_fondos()
         cuenta = {}
         for r in todos:
@@ -1223,19 +1487,39 @@ class Ventana(Gtk.ApplicationWindow):
         opciones = [("Mi lista", len(leer_temas())), ("Todas", len(todos))] + [
             (c, cuenta[c]) for c in sorted(cuenta, key=lambda x: (x in ("Otros", "Sueltos"), x.lower()))]
         for nombre, n in opciones:
-            b = Gtk.ToggleButton(label=f"{nombre}  {n}")
+            b = Gtk.ToggleButton()
             b.add_css_class("flat")
             b.add_css_class("chip-carpeta")
+            fila = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            icono = Gtk.Image.new_from_icon_name(icono_carpeta(nombre))
+            icono.set_pixel_size(16)
+            fila.append(icono)
+            fila.append(Gtk.Label(label=nombre))
+            badge = Gtk.Label(label=str(n))
+            badge.add_css_class("chip-cuenta")
+            fila.append(badge)
+            b.set_child(fila)
             if nombre == "Mi lista":
-                b.set_tooltip_text("Tu lista de temas (temas.txt), la que rota al arrancar")
+                b.set_tooltip_text(
+                    f"Tu lista de temas (temas.txt), la que rota al arrancar · {n} fondos")
+            else:
+                b.set_tooltip_text(f"{n} fondos en {nombre}")
+            try:
+                b.update_property([Gtk.AccessibleProperty.LABEL], [f"{nombre} {n}"])
+            except Exception:
+                pass
             if grupo is None:
                 grupo = b
             else:
                 b.set_group(grupo)
             b.set_active(nombre == activo)
             b.connect("toggled", self._on_chip, nombre)
-            self.fila_chips.append(b)
+            if nombre in ("Mi lista", "Todas") and getattr(self, "fila_chips_fijos", None) is not None:
+                self.fila_chips_fijos.append(b)
+            else:
+                self.fila_chips.append(b)
         self._pintando_chips = False
+        GLib.idle_add(self._actualizar_flechas_chips)
 
     def _on_chip(self, boton, nombre):
         if getattr(self, "_pintando_chips", False) or not boton.get_active():
@@ -1243,13 +1527,13 @@ class Ventana(Gtk.ApplicationWindow):
         if nombre == "Mi lista":
             if self.modo != "temas":
                 self.modo = "temas"
-                self.btn_biblioteca.set_label("Biblioteca")
+                self._actualizar_btn_biblioteca()
                 GLib.idle_add(lambda: (self.cargar(), False)[1])
             return
         self.categoria = nombre
         if self.modo != "biblioteca":
             self.modo = "biblioteca"
-            self.btn_biblioteca.set_label("Volver a temas")
+            self._actualizar_btn_biblioteca()
             GLib.idle_add(lambda: (self.cargar(), False)[1])
         else:
             self.filtrar()
