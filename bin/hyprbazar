@@ -19,7 +19,9 @@ import random
 import shutil
 import subprocess
 import sys
+import functools
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 import urllib.parse
 from pathlib import Path
@@ -530,11 +532,16 @@ PROHIBIDOS_FONDO = re.compile(r"matrix|digital|lluvia|rain|hacker|glitch|code|co
                               r"terminal|binary|python|cyber-?code|computer", re.I)
 
 
+@functools.lru_cache(maxsize=1)
+def _base_fondos():
+    return Path(os.path.realpath(CARPETA_FONDOS))
+
+
+@functools.lru_cache(maxsize=4096)
 def categoria_fondo(ruta):
-    """Subcarpeta de ~/Imágenes/Wallpapers en la que está el fondo."""
+    """Subcarpeta de ~/Imágenes/Wallpapers en la que está el fondo (con caché)."""
     try:
-        base = Path(os.path.realpath(CARPETA_FONDOS))
-        rel = Path(os.path.realpath(ruta)).relative_to(base)
+        rel = Path(os.path.realpath(ruta)).relative_to(_base_fondos())
     except Exception:
         return "Otros"
     return rel.parts[0] if len(rel.parts) > 1 else "Sueltos"
@@ -1102,6 +1109,7 @@ class Ventana(Gtk.ApplicationWindow):
         self.etiquetas.clear()
 
         carpeta = self.carpeta_biblioteca()
+        self._carpeta_cargada = carpeta
         fondos = []
         if carpeta.is_dir():
             try:
@@ -1133,16 +1141,29 @@ class Ventana(Gtk.ApplicationWindow):
         if not pendientes:
             return
 
-        def trabajo():
-            for imagen, ruta in pendientes:
-                try:
-                    thumb = miniatura(ruta)
+        def una(par):
+            imagen, ruta = par
+            try:
+                thumb = miniatura(ruta)
+            except Exception:
+                thumb = None
+            if thumb:
+                try:  # decodificar aquí, fuera del hilo de la ventana (GdkTexture se puede crear en cualquier hilo)
+                    textura = Gdk.Texture.new_from_filename(str(thumb))
                 except Exception:
-                    thumb = None
-                if thumb:
-                    GLib.idle_add(self._poner_miniatura, imagen, thumb)
+                    return
+                GLib.idle_add(self._poner_textura, imagen, textura)
+
+        def trabajo():
+            # varias a la vez: ImageMagick va en procesos aparte, así que se reparten los núcleos
+            with ThreadPoolExecutor(max_workers=max(2, min(8, (os.cpu_count() or 4) // 2))) as pool:
+                list(pool.map(una, pendientes))
 
         threading.Thread(target=trabajo, daemon=True).start()
+
+    def _poner_textura(self, imagen, textura):
+        imagen.set_paintable(textura)
+        return False
 
     def _poner_miniatura(self, imagen, thumb):
         try:
@@ -1178,7 +1199,7 @@ class Ventana(Gtk.ApplicationWindow):
         nombre.add_css_class("store-title")
         caja.append(nombre)
 
-        sub = Gtk.Label(label=str(Path(ruta).relative_to(self.carpeta_biblioteca())))
+        sub = Gtk.Label(label=str(Path(ruta).relative_to(getattr(self, "_carpeta_cargada", None) or self.carpeta_biblioteca())))
         sub.set_xalign(0)
         sub.set_ellipsize(2)
         sub.add_css_class("store-desc")
@@ -1721,14 +1742,26 @@ class PaletasPage(Gtk.Box):
         self.cargar()
 
     def cargar(self):
+        """Pide la lista de paletas en segundo plano (lanza un proceso y frenaba el arranque)."""
+        self._carga_paletas = getattr(self, "_carga_paletas", 0) + 1
+        turno = self._carga_paletas
+
+        def trabajo():
+            paletas = paletas_disponibles()
+            GLib.idle_add(self._pintar_paletas, turno, paletas)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _pintar_paletas(self, turno, paletas):
+        if turno != self._carga_paletas:  # llegó otra carga más reciente
+            return False
         while (hijo := self.flujo.get_first_child()) is not None:
             self.flujo.remove(hijo)
         self.botones.clear()
 
-        paletas = paletas_disponibles()
         if not paletas:
             self.etiqueta.set_text('No hay temas de color todavía. Pulsa "Descargar / actualizar temas".')
-            return
+            return False
 
         actual = ""
         try:
@@ -1739,6 +1772,7 @@ class PaletasPage(Gtk.Box):
         for ident, nombre in paletas:
             self.flujo.append(self.tarjeta(ident, nombre, ident == actual))
         self.etiqueta.set_text(f"{len(paletas)} temas de color · pulsa uno para aplicarlo")
+        return False
 
     def tarjeta(self, ident, nombre, activo):
         caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
