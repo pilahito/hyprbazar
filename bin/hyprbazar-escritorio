@@ -22,6 +22,26 @@ NO_NECESARIOS="rustup paru paru-git yay yay-git"   # herramientas que no hacen f
 
 log() { printf '%s\n' "$*" >&2; }
 
+# Ejecuta como administrador pidiendo la contraseña de la forma que funcione aquí:
+#   · en una terminal → sudo (la pide ahí mismo)
+#   · sin terminal, con un agente gráfico de polkit → pkexec (ventana de contraseña)
+#   · sin nada de eso → abre una terminal para pedirla con sudo
+como_root() {
+    if [ -t 0 ]; then
+        sudo "$@"
+    elif pgrep -f 'polkit.*agent|hyprpolkitagent|polkit-gnome-authentication|lxpolkit|polkit-kde|soteria' >/dev/null 2>&1 \
+         && command -v pkexec >/dev/null; then
+        pkexec "$@"
+    else
+        local term; term="$(command -v kitty || command -v alacritty || command -v foot || true)"
+        if [ -n "$term" ]; then
+            "$term" -e sh -c 'echo "HyprBazar necesita tu contraseña para instalar:"; echo "  $*"; sudo "$@"; s=$?; echo; read -r -p "Pulsa Intro para cerrar " _; exit $s' sh "$@"
+        else
+            log "no hay terminal ni agente de contraseñas; ejecuta: sudo $*"; return 1
+        fi
+    fi
+}
+
 repo_local() {
     local repo="$1" slug destino
     slug="$(printf '%s' "$repo" | tr '/' '-')"
@@ -83,8 +103,7 @@ instalar() {
 
     if [ "${#oficiales[@]}" -gt 0 ]; then
         log "instalando ${#oficiales[@]} paquetes oficiales…"
-        if command -v pkexec >/dev/null; then pkexec pacman -S --needed --noconfirm "${oficiales[@]}"
-        else sudo pacman -S --needed --noconfirm "${oficiales[@]}"; fi || log "algunos paquetes oficiales no se instalaron"
+        como_root pacman -S --needed --noconfirm "${oficiales[@]}" || log "algunos paquetes oficiales no se instalaron"
     fi
     if [ "${#aur[@]}" -gt 0 ]; then
         local ayudante; ayudante="$(command -v paru || command -v yay || true)"
@@ -92,7 +111,14 @@ instalar() {
             log "instalando ${#aur[@]} paquetes de AUR con $(basename "$ayudante")…"
             local p
             for p in "${aur[@]}"; do
-                "$ayudante" -S --needed --noconfirm "$p" >/dev/null 2>&1 && log "  ✓ $p" || log "  ✗ $p (no está en AUR o falló)"
+                # se enseña la salida (compilar puede tardar y puede pedir la contraseña)
+                if "$ayudante" -S --needed --noconfirm "$p"; then
+                    log "  ✓ $p"
+                elif [ "${p%-git}" != "$p" ] && "$ayudante" -S --needed --noconfirm "${p%-git}"; then
+                    log "  ✓ ${p%-git} (versión estable en lugar de $p)"
+                else
+                    log "  ✗ $p (no está en AUR o no se pudo compilar)"
+                fi
             done
         else
             log "faltan de AUR (instálalos a mano): ${aur[*]}"

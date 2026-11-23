@@ -15,6 +15,26 @@ set -uo pipefail
 
 log() { printf '%s\n' "$*" >&2; }
 
+# Ejecuta como administrador pidiendo la contraseña de la forma que funcione aquí:
+#   · en una terminal → sudo (la pide ahí mismo)
+#   · sin terminal, con un agente gráfico de polkit → pkexec (ventana de contraseña)
+#   · sin nada de eso → abre una terminal para pedirla con sudo
+como_root() {
+    if [ -t 0 ]; then
+        sudo "$@"
+    elif pgrep -f 'polkit.*agent|hyprpolkitagent|polkit-gnome-authentication|lxpolkit|polkit-kde|soteria' >/dev/null 2>&1 \
+         && command -v pkexec >/dev/null; then
+        pkexec "$@"
+    else
+        local term; term="$(command -v kitty || command -v alacritty || command -v foot || true)"
+        if [ -n "$term" ]; then
+            "$term" -e sh -c 'echo "HyprBazar necesita tu contraseña para instalar:"; echo "  $*"; sudo "$@"; s=$?; echo; read -r -p "Pulsa Intro para cerrar " _; exit $s' sh "$@"
+        else
+            log "no hay terminal ni agente de contraseñas; ejecuta: sudo $*"; return 1
+        fi
+    fi
+}
+
 # Dependencias fijas por tipo, solo de los repositorios oficiales de Arch.
 # Nunca se ejecutan scripts de instalación de los repos descargados.
 deps_de() {
@@ -132,11 +152,7 @@ instalar_deps() {
         return 0
     fi
     log "instalando dependencias: ${pkgs[*]}"
-    if command -v pkexec >/dev/null; then
-        pkexec pacman -S --needed --noconfirm "${pkgs[@]}"
-    else
-        sudo pacman -S --needed --noconfirm "${pkgs[@]}"
-    fi
+    como_root pacman -S --needed --noconfirm "${pkgs[@]}"
 }
 
 case "${1:-}" in

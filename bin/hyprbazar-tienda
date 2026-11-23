@@ -212,6 +212,144 @@ PYEOF
 }
 
 # ───────────────────────── instalar ─────────────────────────────────────────
+# Copia los temas GTK / iconos / cursores / Kvantum que haya dentro de una carpeta.
+# Usa las variables «sistema» y «tipos» de quien la llama.
+copiar_temas_sistema() {
+    local raiz="$1" nombre_base="${2:-${repo##*/}}" d nombre
+    local TEMAS_DIR="$HOME/.local/share/themes" ICONOS_DIR="$HOME/.local/share/icons" KV_DIR="$HOME/.config/Kvantum"
+    # GTK: carpetas con gtk-3.0/gtk.css o gtk-4.0/gtk.css (no los temas de atajos ni carpetas de configuración)
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        case "$(basename "$d")" in config|.config|home|dotfiles) continue ;; esac
+        [ -f "$d/gtk-3.0/gtk.css" ] || [ -f "$d/gtk-4.0/gtk.css" ] || [ -f "$d/gtk-3.0/gtk-dark.css" ] || continue
+        nombre="$(basename "$d")"; [ "$d" = "$raiz" ] && nombre="$nombre_base"
+        mk "$TEMAS_DIR"; rm -rf "${TEMAS_DIR:?}/$nombre"
+        cp -r "$d" "$TEMAS_DIR/$nombre" && rm -rf "$TEMAS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(gtk); }
+    done < <(find "$raiz" -type d \( -name gtk-3.0 -o -name gtk-4.0 \) -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
+    # cursores: carpetas con cursors/ y su index.theme
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        [ -f "$d/index.theme" ] || [ "$(find "$d/cursors" -maxdepth 1 -type f -o -type l | head -1)" ] || continue
+        nombre="$(basename "$d")"; [ "$d" = "$raiz" ] && nombre="$nombre_base"
+        mk "$ICONOS_DIR"; rm -rf "${ICONOS_DIR:?}/$nombre"
+        cp -r "$d" "$ICONOS_DIR/$nombre" && rm -rf "$ICONOS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(cursor); }
+    done < <(find "$raiz" -type d -name cursors -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
+    # iconos: index.theme con «Directories=» (un tema de iconos de verdad) y sin cursores
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        [ -d "$d/cursors" ] && continue
+        [ "$(basename "$d")" = default ] && continue
+        nombre="$(basename "$d")"; [ "$d" = "$raiz" ] && nombre="$nombre_base"
+        mk "$ICONOS_DIR"; rm -rf "${ICONOS_DIR:?}/$nombre"
+        cp -r "$d" "$ICONOS_DIR/$nombre" && rm -rf "$ICONOS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(iconos); }
+    done < <(grep -rl --include=index.theme '^Directories=' "$raiz" 2>/dev/null | grep -v '/.git/' | xargs -r -n1 dirname | sort -u)
+    # Kvantum: carpetas con *.kvconfig
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        nombre="$(basename "$d")"; [ "$d" = "$raiz" ] && nombre="$nombre_base"
+        mk "$KV_DIR"; rm -rf "${KV_DIR:?}/$nombre"
+        cp -r "$d" "$KV_DIR/$nombre" && rm -rf "$KV_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(kvantum); }
+    done < <(find "$raiz" -name '*.kvconfig' -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
+    return 0
+}
+
+# Baja los paquetes ya montados de la última «Release» (tar/zip) y copia sus temas.
+descargar_releases() {
+    local repo="$1" tmp url n=0
+    tmp="$(mktemp -d)"
+    while IFS=$'\t' read -r url tam; do
+        [ -n "$url" ] || continue
+        [ "${tam:-0}" -lt 209715200 ] || continue        # cada archivo < 200 MB
+        n=$((n + 1)); [ "$n" -le 12 ] || break           # como mucho 12 archivos
+        log "bajando $(basename "$url")…"
+        local f="$tmp/$(basename "$url")" dir="$tmp/x$n"
+        curl -sSL -m 600 -o "$f" "$url" || continue
+        mk "$dir"
+        case "$f" in
+            *.zip) unzip -q -o "$f" -d "$dir" 2>/dev/null ;;
+            *) tar -xf "$f" -C "$dir" 2>/dev/null ;;
+        esac
+        # nombre del tema = nombre del archivo sin extensión (Nordic-darker.tar.xz → Nordic-darker)
+        local base_arch; base_arch="$(basename "$url")"; base_arch="${base_arch%%.tar.*}"; base_arch="${base_arch%.tgz}"; base_arch="${base_arch%.zip}"
+        copiar_temas_sistema "$dir" "$base_arch"
+    done < <(gh "$API/repos/$repo/releases/latest" \
+             | jq -r '.assets[]? | select(.name | test("\\.(tar\\.(xz|gz|bz2|zst)|tgz|zip)$")) | "\(.browser_download_url)\t\(.size)"' 2>/dev/null)
+    rm -rf "$tmp"
+}
+
+# Como administrador: sudo en una terminal; si no hay terminal, abre una para pedir la contraseña.
+como_root() {
+    if [ -t 0 ]; then sudo "$@"; return; fi
+    local term; term="$(command -v kitty || command -v alacritty || command -v foot || true)"
+    [ -n "$term" ] || { log "ejecuta en una terminal: sudo $*"; return 1; }
+    "$term" -e sh -c 'echo "HyprBazar necesita tu contraseña:"; echo "  $*"; "$@"; s=$?; echo; read -r -p "Pulsa Intro para cerrar " _; exit $s' sh sudo "$@"
+}
+
+# Algunos temas se instalan mejor como paquete (hay que compilarlos o son enormes):
+# se busca un paquete con el nombre del repo en los oficiales de Arch y en AUR.
+instalar_como_paquete() {
+    local base cand ayudante
+    base="$(printf '%s' "${repo##*/}" | tr 'A-Z_' 'a-z-')"
+    ayudante="$(command -v paru || command -v yay || true)"
+    for cand in "$base" "${base%-theme}-theme" "$base-git" "kvantum-theme-$base" "kvantum-theme-$base-git" "${base%-cursors}-cursors"; do
+        if pacman -Qq "$cand" >/dev/null 2>&1; then log "ya tienes el paquete $cand"; sistema=$((sistema + 1)); return 0; fi
+        if pacman -Si "$cand" >/dev/null 2>&1; then
+            if [ "${SIN_DEPS:-0}" = "1" ]; then log "se instalaría el paquete oficial $cand"; sistema=$((sistema + 1)); return 0; fi
+            log "instalando el paquete oficial $cand…"
+            como_root pacman -S --needed --noconfirm "$cand" && { sistema=$((sistema + 1)); return 0; }
+        elif [ -n "$ayudante" ] && "$ayudante" -Si --aur "$cand" >/dev/null 2>&1; then
+            if [ "${SIN_DEPS:-0}" = "1" ]; then log "se instalaría el paquete de AUR $cand"; sistema=$((sistema + 1)); return 0; fi
+            log "instalando $cand desde AUR…"
+            if [ -t 0 ]; then "$ayudante" -S --needed --noconfirm "$cand"
+            else local term; term="$(command -v kitty || command -v alacritty || command -v foot || true)"
+                 [ -n "$term" ] && "$term" -e sh -c '"$@"; read -r -p "Pulsa Intro para cerrar " _' sh "$ayudante" -S --needed --noconfirm "$cand"
+            fi && { sistema=$((sistema + 1)); return 0; }
+        fi
+    done
+    return 1
+}
+
+# Paletas en otros formatos (p. ej. Catppuccin: M.mauve = 'rgb(cba6f7)' o $mauve = rgb(cba6f7))
+paletas_genericas() {
+    local raiz="$1" f id dest
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        id="$(basename "${f%.*}")"
+        dest="$PALETAS/${slug}--${id}"
+        [ -f "$dest/colors.json" ] && continue
+        mk "$dest"
+        if python3 -I - "$f" "$dest" "$id" "$repo" <<'PYGEN'
+import json, re, sys
+f, dest, ident, repo = sys.argv[1:5]
+v = {}
+for linea in open(f, encoding="utf-8", errors="ignore"):
+    m = re.search(r"[$.]?([A-Za-z][A-Za-z0-9_]*)\s*=\s*['\"]?(?:rgba?\()?#?([0-9a-fA-F]{6})", linea)
+    if m and not m.group(1).endswith("Alpha"):
+        v.setdefault(m.group(1).lower(), "#" + m.group(2).lower())
+def c(*k):
+    return next((v[x] for x in k if x in v), None)
+bg, fg = c("base", "background", "bg"), c("text", "foreground", "fg")
+if not bg or not fg or len(v) < 8:
+    sys.exit(1)
+colores = {
+    "bg": bg, "bg_alt": c("mantle", "crust", "black") or bg, "surface": c("surface0", "surface", "black") or bg,
+    "surface2": c("surface1", "surface2", "overlay0") or bg, "fg": fg, "fg_dim": c("subtext0", "subtext1", "comment") or fg,
+    "accent": c("mauve", "blue", "accent", "purple") or fg, "accent_alt": c("lavender", "sapphire", "cyan") or fg,
+    "red": c("red") or fg, "orange": c("peach", "orange") or fg, "yellow": c("yellow") or fg, "green": c("green") or fg,
+    "teal": c("teal", "cyan") or fg, "blue": c("blue") or fg, "sky": c("sky", "cyan") or fg, "mauve": c("mauve", "purple") or fg,
+    "pink": c("pink", "magenta") or fg, "lavender": c("lavender") or fg,
+    "border_active": c("mauve", "blue", "accent") or fg, "border_inactive": c("surface1", "surface0") or bg,
+    "shadow": c("crust", "mantle") or bg, "overlay": c("overlay0", "surface2") or bg,
+}
+nombre = re.sub(r"[-_]+", " ", ident).strip().title()
+json.dump(colores, open(f"{dest}/colors.json", "w"), indent=2)
+json.dump({"name": nombre, "author": repo.split("/")[0]}, open(f"{dest}/theme.json", "w"), indent=2)
+open(f"{dest}/repo.txt", "w").write(repo + "\n")
+PYGEN
+        then paletas=$((paletas + 1)); else rm -rf "$dest"; fi
+    done < <(find "$raiz" \( -path '*/themes/*.lua' -o -path '*/themes/*.conf' \) -not -path "*/.git/*" 2>/dev/null)
+}
+
 instalar() {
     local repo="$1" slug destino
     slug="$(printf '%s' "$repo" | tr '/' '-')"
@@ -224,7 +362,7 @@ instalar() {
         git -C "$destino" reset --hard FETCH_HEAD >/dev/null 2>&1
         # repos bajados con una versión anterior: añadir los archivos de colores de los rices
         if [ "$(git -C "$destino" config --get core.sparseCheckout 2>/dev/null)" = "true" ]; then
-            git -C "$destino" sparse-checkout add '**/theme-config.bash' >/dev/null 2>&1 || true
+            git -C "$destino" sparse-checkout add '**/theme-config.bash' '**/themes/*.lua' '**/themes/*.conf' >/dev/null 2>&1 || true
         fi
     else
         log "descargando $repo…"
@@ -234,7 +372,7 @@ instalar() {
             log "no pude descargar $repo"; return 1; }
         # solo lo que sirve: paletas, fondos y capturas
         local patrones=(
-            '**/colors.json' '**/theme.json' '**/theme-config.bash'
+            '**/colors.json' '**/theme.json' '**/theme-config.bash' '**/themes/*.lua' '**/themes/*.conf'
             '**/wallpapers/**' '**/Wallpapers/**' '**/wallpaper/**' '**/Wallpaper/**'
             '**/backgrounds/**' '**/Backgrounds/**' '**/walls/**' '**/Walls/**'
             'Screenshots/**' 'screenshots/**' '**/Screenshots/**'
@@ -270,7 +408,8 @@ instalar() {
         [ -n "$img" ] || continue
         cp -f "$img" "$carpeta/" 2>/dev/null && fondos=$((fondos + 1))
     done < <(find "$destino" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) \
-             -not -path "*/.git/*" -not -path "*/Screenshots/*" -not -path "*/screenshots/*" 2>/dev/null)
+             -not -path "*/.git/*" -not -path "*/Screenshots/*" -not -path "*/screenshots/*" 2>/dev/null \
+             | grep -iE '/(wallpapers?|backgrounds?|walls?|fondos)/')
 
     # ── plan B: si no apareció nada, bajar el repo entero (si no es enorme) ──
     if [ "$paletas" -eq 0 ] && [ "$fondos" -eq 0 ] && [ "${SOLO_PALETAS:-0}" != "1" ]; then
@@ -297,6 +436,9 @@ instalar() {
             done < <(find "$destino" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) -not -path "*/.git/*" -not -path "*/Screenshots/*" 2>/dev/null)
         fi
     fi
+
+    # ── paletas en otros formatos (Catppuccin .lua/.conf…) ──
+    paletas_genericas "$destino"
 
     # ── rices (p. ej. gh0stzk): theme-config.bash con colores → tema de color ──
     while IFS= read -r cfg; do
@@ -345,49 +487,32 @@ PYRICE
 
     # ── temas del sistema: GTK, iconos, cursores y Kvantum (no solo Hyprland) ──
     local sistema=0 tipos=()
-    if [ "${SOLO_PALETAS:-0}" != "1" ] && \
-       gh "$API/repos/$repo/git/trees/HEAD?recursive=1" | jq -r '.tree[]?.path' 2>/dev/null \
-         | grep -qE '(^|/)(gtk-[34]\.0|cursors)/|(^|/)index\.theme$|\.kvconfig$'; then
-        local tam2
-        tam2="$(gh "$API/repos/$repo" | jq -r '.size // 0')"
-        if [ "${tam2:-0}" -lt 300000 ]; then   # < ~300 MB
-            log "tiene temas del sistema; descargando el repo completo…"
-            git -C "$destino" sparse-checkout disable >/dev/null 2>&1 || true
-            local TEMAS_DIR="$HOME/.local/share/themes" ICONOS_DIR="$HOME/.local/share/icons" KV_DIR="$HOME/.config/Kvantum"
-            local d nombre
-            # GTK: carpetas con gtk-3.0/ o gtk-4.0/
-            while IFS= read -r d; do
-                [ -n "$d" ] || continue
-                nombre="$(basename "$d")"; [ "$d" = "$destino" ] && nombre="${repo##*/}"
-                mk "$TEMAS_DIR"; rm -rf "${TEMAS_DIR:?}/$nombre"
-                cp -r "$d" "$TEMAS_DIR/$nombre" && rm -rf "$TEMAS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(gtk); }
-            done < <(find "$destino" -type d \( -name gtk-3.0 -o -name gtk-4.0 \) -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u \
-                     | while IFS= read -r x; do case "$(basename "$x")" in config|.config|home|dotfiles) continue ;; esac; [ -f "$x/index.theme" ] || [ -f "$x/gtk-3.0/gtk.css" ] && printf '%s\n' "$x"; done)
-            # cursores: carpetas con cursors/
-            while IFS= read -r d; do
-                [ -n "$d" ] || continue
-                nombre="$(basename "$d")"; [ "$d" = "$destino" ] && nombre="${repo##*/}"
-                mk "$ICONOS_DIR"; rm -rf "${ICONOS_DIR:?}/$nombre"
-                cp -r "$d" "$ICONOS_DIR/$nombre" && rm -rf "$ICONOS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(cursor); }
-            done < <(find "$destino" -type d -name cursors -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
-            # iconos: index.theme con [Icon Theme] y sin cursores
-            while IFS= read -r d; do
-                [ -n "$d" ] || continue
-                [ -d "$d/cursors" ] && continue
-                nombre="$(basename "$d")"; [ "$d" = "$destino" ] && nombre="${repo##*/}"
-                mk "$ICONOS_DIR"; rm -rf "${ICONOS_DIR:?}/$nombre"
-                cp -r "$d" "$ICONOS_DIR/$nombre" && rm -rf "$ICONOS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(iconos); }
-            done < <(grep -rl --include=index.theme '^Directories=' "$destino" 2>/dev/null | grep -v '/.git/' | xargs -r -n1 dirname | sort -u \
-                     | while IFS= read -r x; do [ "$(basename "$x")" = default ] || printf '%s\n' "$x"; done)
-            # Kvantum: carpetas con *.kvconfig
-            while IFS= read -r d; do
-                [ -n "$d" ] || continue
-                nombre="$(basename "$d")"; [ "$d" = "$destino" ] && nombre="${repo##*/}"
-                mk "$KV_DIR"; rm -rf "${KV_DIR:?}/$nombre"
-                cp -r "$d" "$KV_DIR/$nombre" && rm -rf "$KV_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(kvantum); }
-            done < <(find "$destino" -name '*.kvconfig' -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
-        else
-            log "el repo es demasiado grande para bajar sus temas del sistema (${tam2} KB)"
+    if [ "${SOLO_PALETAS:-0}" != "1" ]; then
+        # primero las variantes ya montadas que el autor publica en «Releases»
+        descargar_releases "$repo"
+        # (se guarda en una variable: con «| grep -q» y pipefail, en repos grandes salía «no»)
+        local arbol
+        arbol="$(gh "$API/repos/$repo/git/trees/HEAD?recursive=1" | jq -r '.tree[]?.path' 2>/dev/null)"
+        if [ "$sistema" -eq 0 ] && grep -qE '(^|/)(gtk-[34]\.0|cursors)/|(^|/)index\.theme$|\.kvconfig$' <<<"$arbol"; then
+            local tam2
+            tam2="$(gh "$API/repos/$repo" | jq -r '.size // 0')"
+            if [ "${tam2:-0}" -lt 300000 ]; then   # < ~300 MB
+                log "tiene temas del sistema; descargando el repo completo…"
+                git -C "$destino" sparse-checkout disable >/dev/null 2>&1 || true
+                copiar_temas_sistema "$destino"
+            else
+                log "el repo es demasiado grande para bajar sus temas del sistema (${tam2} KB)"
+            fi
+        fi
+        # y otros solo se pueden instalar como paquete (Orchis, Papirus, Qogir…)
+        # o el repo es de iconos / temas y no ha salido ese tipo (p. ej. Qogir-icon-theme
+        # solo trae cursores montados; sus iconos hay que compilarlos → paquete)
+        local nombre_repo; nombre_repo="$(printf '%s' "${repo##*/}" | tr 'A-Z' 'a-z')"
+        local falta_tipo=0
+        case "$nombre_repo" in *icon*) [[ " ${tipos[*]} " == *" iconos "* ]] || falta_tipo=1 ;; esac
+        case "$nombre_repo" in *gtk*|*-theme) [[ " ${tipos[*]} " == *" gtk "* || " ${tipos[*]} " == *" iconos "* ]] || falta_tipo=1 ;; esac
+        if { [ "$sistema" -eq 0 ] && [ "$paletas" -eq 0 ]; } || [ "$falta_tipo" -eq 1 ]; then
+            instalar_como_paquete || true
         fi
     fi
 
