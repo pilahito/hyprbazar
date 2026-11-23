@@ -4994,6 +4994,91 @@ def _descargar(url: str, destino: Path) -> bool:
 
 
 # ────────────────────────────── temas del sistema ───────────────────────────
+TEMAS_COMPLETOS = Path.home() / ".config" / "hyprbazar" / "temas-completos.json"
+
+
+def _poner_fondo(ruta):
+    """Pone un fondo en todos los monitores (igual que la pestaña Fondos)."""
+    try:
+        nombres = [m["name"] for m in json.loads(subprocess.run(
+            ["hyprctl", "monitors", "-j"], capture_output=True, text=True, timeout=15).stdout or "[]")]
+    except Exception:
+        nombres = []
+    ok = False
+    for monitor in nombres:
+        ok |= subprocess.run(["dms", "ipc", "call", "wallpaper", "setFor", monitor, ruta],
+                             capture_output=True, timeout=30).returncode == 0
+    if not ok:
+        subprocess.run(["dms", "ipc", "call", "wallpaper", "set", ruta], capture_output=True, timeout=30)
+    if shutil.which("awww"):
+        subprocess.run(["awww", "img", ruta, "--transition-type", "any", "--transition-duration", "1"],
+                       capture_output=True, timeout=30)
+
+
+def _fondo_actual():
+    """Ruta del fondo puesto ahora (DMS o, si no responde, awww)."""
+    try:
+        r = subprocess.run(["dms", "ipc", "call", "wallpaper", "get"], capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and Path(r.stdout.strip()).is_file():
+            return r.stdout.strip()
+    except Exception:
+        pass
+    try:
+        salida = subprocess.run(["awww", "query"], capture_output=True, text=True, timeout=10).stdout
+        m = re.search(r"image:\s*(\S.*)$", salida, re.M)
+        if m and Path(m.group(1).strip()).is_file():
+            return m.group(1).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def leer_temas_completos():
+    """Temas completos guardados por ti + los que salen de los rices instalados."""
+    guardados = []
+    try:
+        guardados = json.loads(TEMAS_COMPLETOS.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    nombres = {g.get("nombre") for g in guardados}
+    auto = []
+    if PALETAS_DIR.is_dir():
+        for d in sorted(PALETAS_DIR.iterdir()):
+            if "--" not in d.name or d.name.startswith("propio--"):
+                continue
+            slug, rid = d.name.split("--", 1)
+            carpeta = CARPETA_FONDOS / "Comunidad" / slug / rid
+            fondos = sorted(f for f in carpeta.glob("*") if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif")) if carpeta.is_dir() else []
+            if not fondos:
+                continue
+            try:
+                titulo = json.loads((d / "theme.json").read_text(encoding="utf-8")).get("name") or rid
+            except Exception:
+                titulo = rid
+            nombre = f"{titulo} ({slug.split('-')[0]})"
+            if nombre not in nombres:
+                auto.append({"nombre": nombre, "paleta": d.name, "fondo": str(fondos[0]), "origen": "rice"})
+    return guardados + auto
+
+
+def guardar_tema_completo(tema):
+    try:
+        lista = json.loads(TEMAS_COMPLETOS.read_text(encoding="utf-8"))
+    except Exception:
+        lista = []
+    lista = [t for t in lista if t.get("nombre") != tema["nombre"]] + [tema]
+    TEMAS_COMPLETOS.parent.mkdir(parents=True, exist_ok=True)
+    TEMAS_COMPLETOS.write_text(json.dumps(lista, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def borrar_tema_completo(nombre):
+    try:
+        lista = json.loads(TEMAS_COMPLETOS.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    TEMAS_COMPLETOS.write_text(json.dumps([t for t in lista if t.get("nombre") != nombre], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 TIPOS_SISTEMA = (
     ("gtk", "Aplicaciones (GTK)", "El aspecto de las ventanas de GNOME, Nautilus, ajustes…"),
     ("iconos", "Iconos", "Iconos de apps y carpetas"),
@@ -5028,6 +5113,43 @@ class SistemaPage(Gtk.Box):
         recargar.connect("clicked", lambda *_: self.cargar())
         barra.append(recargar)
         self.append(barra)
+
+        # Tema completo: colores + fondo + GTK + iconos + cursor + Kvantum, todo de una vez
+        completo = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        completo.set_margin_top(14)
+        completo.set_margin_start(24)
+        completo.set_margin_end(24)
+        cab = Gtk.Label(label="Tema completo")
+        cab.set_xalign(0)
+        cab.add_css_class("store-title")
+        completo.append(cab)
+        fila = Gtk.Box(spacing=8)
+        self.completos = []
+        self.desplegable_completo = Gtk.DropDown.new_from_strings([])
+        self.desplegable_completo.set_hexpand(True)
+        self.desplegable_completo.connect("notify::selected", self.on_elegir_completo)
+        fila.append(self.desplegable_completo)
+        aplicar_todo = Gtk.Button(label="Aplicar todo")
+        aplicar_todo.add_css_class("suggested-action")
+        aplicar_todo.set_tooltip_text("Pone los colores, el fondo y los temas de apps, iconos, cursor y Qt de este tema")
+        aplicar_todo.connect("clicked", self.on_aplicar_completo)
+        fila.append(aplicar_todo)
+        borrar = Gtk.Button(label="Borrar")
+        borrar.add_css_class("flat")
+        borrar.set_tooltip_text("Borra este tema completo guardado (no desinstala nada)")
+        borrar.connect("clicked", self.on_borrar_completo)
+        fila.append(borrar)
+        completo.append(fila)
+        fila2 = Gtk.Box(spacing=8)
+        self.nombre_completo = Gtk.Entry(placeholder_text="Nombre para guardar (p. ej. «Mi noche azul»)", hexpand=True)
+        fila2.append(self.nombre_completo)
+        guardar = Gtk.Button(label="Guardar como tema completo")
+        guardar.set_tooltip_text("Guarda los colores puestos, el fondo actual y lo elegido abajo. "
+                                 "Con el mismo nombre se actualiza: así se conservan tus cambios")
+        guardar.connect("clicked", self.on_guardar_completo)
+        fila2.append(guardar)
+        completo.append(fila2)
+        self.append(completo)
 
         rejilla = Gtk.Grid(column_spacing=14, row_spacing=14)
         rejilla.set_margin_top(18)
@@ -5091,7 +5213,86 @@ class SistemaPage(Gtk.Box):
                 desplegable.set_selected(lista_tipo.index(puesto))
             total += len(lista_tipo)
         self.estado.set_text(f"{total} temas del sistema instalados · los de la Tienda aparecen aquí al instalarlos")
+        self._cargar_completos()
         return False
+
+    # ── temas completos ──
+    def _cargar_completos(self, elegir=None):
+        self.completos = leer_temas_completos()
+        nombres = [t["nombre"] for t in self.completos] or ["(todavía no hay ninguno)"]
+        self.desplegable_completo.set_model(Gtk.StringList.new(nombres))
+        if elegir in nombres:
+            self.desplegable_completo.set_selected(nombres.index(elegir))
+
+    def _completo_elegido(self):
+        i = self.desplegable_completo.get_selected()
+        return self.completos[i] if 0 <= i < len(self.completos) else None
+
+    def on_elegir_completo(self, *_):
+        tema = self._completo_elegido()
+        if not tema:
+            return
+        self.nombre_completo.set_text(tema["nombre"])
+        # enseñar sus valores abajo para poder editarlos
+        for tipo, desplegable in self.desplegables.items():
+            valor = tema.get(tipo)
+            if valor and valor in self.nombres.get(tipo, []):
+                desplegable.set_selected(self.nombres[tipo].index(valor))
+
+    def on_aplicar_completo(self, *_):
+        tema = self._completo_elegido()
+        if not tema:
+            self.estado.set_text("Primero guarda o instala un tema completo.")
+            return
+        self.estado.set_text(f"Aplicando el tema completo {tema['nombre']}…")
+
+        def trabajo():
+            hechos = []
+            if tema.get("paleta"):
+                subprocess.run([str(PALETA), "aplicar", tema["paleta"]], capture_output=True, timeout=180)
+                hechos.append("colores")
+            for tipo, *_ in TIPOS_SISTEMA:
+                if tema.get(tipo):
+                    if subprocess.run([str(SISTEMA_BIN), "aplicar", tipo, tema[tipo]], capture_output=True, timeout=30).returncode == 0:
+                        hechos.append(tipo)
+            if tema.get("fondo") and Path(tema["fondo"]).is_file():
+                _poner_fondo(tema["fondo"])
+                hechos.append("fondo")
+            GLib.idle_add(self.estado.set_text, f"Puesto {tema['nombre']}: " + ", ".join(hechos))
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def on_guardar_completo(self, *_):
+        nombre = self.nombre_completo.get_text().strip()
+        if not nombre:
+            self.estado.set_text("Escribe un nombre para el tema completo.")
+            return
+        tema = {"nombre": nombre}
+        try:
+            tema["paleta"] = (CACHE_PALETAS / "actual").read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+        tema_fondo = _fondo_actual()
+        if tema_fondo:
+            tema["fondo"] = tema_fondo
+        for tipo, desplegable in self.desplegables.items():
+            lista = self.nombres.get(tipo) or []
+            i = desplegable.get_selected()
+            if lista and 0 <= i < len(lista):
+                tema[tipo] = lista[i]
+        guardar_tema_completo(tema)
+        self._cargar_completos(elegir=nombre)
+        self.estado.set_text(f"Guardado «{nombre}»: colores, fondo y temas de apps, iconos, cursor y Qt")
+
+    def on_borrar_completo(self, *_):
+        tema = self._completo_elegido()
+        if not tema:
+            return
+        if tema.get("origen") == "rice":
+            self.estado.set_text("Ese viene de un rice instalado; se quita desinstalándolo desde la Tienda.")
+            return
+        borrar_tema_completo(tema["nombre"])
+        self._cargar_completos()
+        self.estado.set_text(f"Borrado «{tema['nombre']}»")
 
     def on_aplicar(self, _boton, tipo):
         lista = self.nombres.get(tipo) or []
