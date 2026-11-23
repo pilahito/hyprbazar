@@ -222,6 +222,10 @@ instalar() {
         log "actualizando $repo…"
         git -C "$destino" fetch --depth 1 origin >/dev/null 2>&1 && \
         git -C "$destino" reset --hard FETCH_HEAD >/dev/null 2>&1
+        # repos bajados con una versión anterior: añadir los archivos de colores de los rices
+        if [ "$(git -C "$destino" config --get core.sparseCheckout 2>/dev/null)" = "true" ]; then
+            git -C "$destino" sparse-checkout add '**/theme-config.bash' >/dev/null 2>&1 || true
+        fi
     else
         log "descargando $repo…"
         rm -rf "$destino"
@@ -230,7 +234,7 @@ instalar() {
             log "no pude descargar $repo"; return 1; }
         # solo lo que sirve: paletas, fondos y capturas
         local patrones=(
-            '**/colors.json' '**/theme.json'
+            '**/colors.json' '**/theme.json' '**/theme-config.bash'
             '**/wallpapers/**' '**/Wallpapers/**' '**/wallpaper/**' '**/Wallpaper/**'
             '**/backgrounds/**' '**/Backgrounds/**' '**/walls/**' '**/Walls/**'
             'Screenshots/**' 'screenshots/**' '**/Screenshots/**'
@@ -294,6 +298,51 @@ instalar() {
         fi
     fi
 
+    # ── rices (p. ej. gh0stzk): theme-config.bash con colores → tema de color ──
+    while IFS= read -r cfg; do
+        [ -n "$cfg" ] || continue
+        local rdir rid rdest
+        rdir="$(dirname "$cfg")"; rid="$(basename "$rdir")"
+        rdest="$PALETAS/${slug}--${rid}"
+        [ -f "$rdest/colors.json" ] && continue
+        mk "$rdest"
+        if python3 -I - "$cfg" "$rdest" "$rid" "$repo" <<'PYRICE'
+import json, re, sys
+cfg, dest, rid, repo = sys.argv[1:5]
+v = {}
+for linea in open(cfg, encoding="utf-8", errors="ignore"):
+    m = re.match(r'\s*([A-Za-z_]+)="(#[0-9A-Fa-f]{6,8})"', linea)
+    if m:
+        v[m.group(1)] = "#" + m.group(2)[-6:] if len(m.group(2)) == 9 else m.group(2)
+if "bg" not in v or "fg" not in v:
+    sys.exit(1)
+c = lambda *k: next((v[x] for x in k if x in v), v["fg"])
+colores = {
+    "bg": v["bg"], "bg_alt": c("black", "bg"), "surface": c("blackb", "black"), "surface2": c("grey", "blackb"),
+    "fg": v["fg"], "fg_dim": c("white", "fg"),
+    "accent": c("blue", "cyan"), "accent_alt": c("magenta", "cyan"),
+    "red": c("red"), "orange": c("orange", "yellow"), "yellow": c("yellow"), "green": c("green"),
+    "teal": c("cyan"), "blue": c("blue"), "sky": c("cyanb", "cyan"), "mauve": c("magenta"),
+    "pink": c("pink", "magenta"), "lavender": c("indigo", "blueb", "blue"),
+    "border_active": c("blue", "magenta"), "border_inactive": c("blackb", "black"),
+    "shadow": c("black", "bg"), "overlay": c("blackb", "grey"),
+}
+json.dump(colores, open(f"{dest}/colors.json", "w"), indent=2)
+json.dump({"name": rid.capitalize(), "author": repo.split("/")[0]}, open(f"{dest}/theme.json", "w"), indent=2)
+open(f"{dest}/repo.txt", "w").write(repo + "\n")
+PYRICE
+        then
+            paletas=$((paletas + 1))
+            # sus fondos, en una carpeta por rice
+            if [ -d "$rdir/walls" ]; then
+                mk "$carpeta/$rid"
+                cp -f "$rdir"/walls/* "$carpeta/$rid/" 2>/dev/null
+            fi
+        else
+            rm -rf "$rdest"
+        fi
+    done < <(find "$destino" -name theme-config.bash -not -path "*/.git/*" 2>/dev/null)
+
     # ── temas del sistema: GTK, iconos, cursores y Kvantum (no solo Hyprland) ──
     local sistema=0 tipos=()
     if [ "${SOLO_PALETAS:-0}" != "1" ] && \
@@ -312,7 +361,8 @@ instalar() {
                 nombre="$(basename "$d")"; [ "$d" = "$destino" ] && nombre="${repo##*/}"
                 mk "$TEMAS_DIR"; rm -rf "${TEMAS_DIR:?}/$nombre"
                 cp -r "$d" "$TEMAS_DIR/$nombre" && rm -rf "$TEMAS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(gtk); }
-            done < <(find "$destino" -type d \( -name gtk-3.0 -o -name gtk-4.0 \) -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
+            done < <(find "$destino" -type d \( -name gtk-3.0 -o -name gtk-4.0 \) -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u \
+                     | while IFS= read -r x; do case "$(basename "$x")" in config|.config|home|dotfiles) continue ;; esac; [ -f "$x/index.theme" ] || [ -f "$x/gtk-3.0/gtk.css" ] && printf '%s\n' "$x"; done)
             # cursores: carpetas con cursors/
             while IFS= read -r d; do
                 [ -n "$d" ] || continue
@@ -327,7 +377,8 @@ instalar() {
                 nombre="$(basename "$d")"; [ "$d" = "$destino" ] && nombre="${repo##*/}"
                 mk "$ICONOS_DIR"; rm -rf "${ICONOS_DIR:?}/$nombre"
                 cp -r "$d" "$ICONOS_DIR/$nombre" && rm -rf "$ICONOS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(iconos); }
-            done < <(grep -rl --include=index.theme '^\[Icon Theme\]' "$destino" 2>/dev/null | grep -v '/.git/' | xargs -r -n1 dirname | sort -u)
+            done < <(grep -rl --include=index.theme '^Directories=' "$destino" 2>/dev/null | grep -v '/.git/' | xargs -r -n1 dirname | sort -u \
+                     | while IFS= read -r x; do [ "$(basename "$x")" = default ] || printf '%s\n' "$x"; done)
             # Kvantum: carpetas con *.kvconfig
             while IFS= read -r d; do
                 [ -n "$d" ] || continue
