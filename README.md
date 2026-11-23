@@ -24,6 +24,7 @@ español y sin tocar tu configuración.
 | **Tienda** | busca temas en GitHub, muestra la **captura real** de cada repo, **traduce la descripción al español** y descarga lo aprovechable (paletas, fondos y temas GTK, de iconos, cursores y Kvantum) e **instala solo sus dependencias** desde los repos oficiales de Arch |
 | **Temas del sistema** | temas de **aplicaciones GTK**, **iconos**, **cursores** y **apps Qt (Kvantum)**: elige y aplica cada uno; botón para instalar lo que necesitan |
 | **Editar colores** | en cada tema de color, **Editar colores** abre un editor y lo guarda como **tema propio** |
+| **Escritorio completo** | en los rices de otros escritorios (BSPWM, i3…), instala ese escritorio **aparte** con sus paquetes (oficiales y AUR) y su configuración, sin tocar tu Hyprland; eliges cuál usar al iniciar sesión |
 
 Y dos cosas que casi nadie hace bien:
 

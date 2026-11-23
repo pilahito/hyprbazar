@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# hyprbazar-escritorio — instala un rice de otro escritorio (BSPWM, i3…) como
+# ESCRITORIO APARTE: sus paquetes y su configuración, sin tocar la tuya.
+#
+#   · Paquetes: se leen de la lista que trae el instalador del propio repo
+#     (variable dependencies="…"), pero NO se ejecuta ese instalador.
+#     Los de los repos oficiales van con pacman; los que solo estén en AUR,
+#     con paru/yay. Nunca se añaden repositorios de terceros.
+#   · Configuración: se copian las carpetas config/<app> que todavía NO tengas.
+#     Las que ya existen (kitty, nvim…) se dejan como están, para que tu
+#     Hyprland no cambie. Nunca se copian servicios (systemd) ni tu .zshrc.
+#   · Al terminar, en la pantalla de inicio de sesión eliges el escritorio.
+#
+# Uso:
+#   hyprbazar-escritorio revisar  <owner/repo>   qué instalaría (sin cambiar nada)
+#   hyprbazar-escritorio instalar <owner/repo>   lo instala
+set -uo pipefail
+
+DATOS="${XDG_DATA_HOME:-$HOME/.local/share}/tienda"
+EXCLUIR_CONFIG="systemd paru yay gtk-3.0 gtk-4.0 autostart environment.d"
+NO_NECESARIOS="rustup paru paru-git yay yay-git"   # herramientas que no hacen falta (o que ya tienes de otra forma)
+
+log() { printf '%s\n' "$*" >&2; }
+
+repo_local() {
+    local repo="$1" slug destino
+    slug="$(printf '%s' "$repo" | tr '/' '-')"
+    destino="$DATOS/escritorios/$slug"
+    if [ -d "$destino/.git" ]; then
+        git -C "$destino" fetch --depth 1 origin >/dev/null 2>&1 && git -C "$destino" reset --hard FETCH_HEAD >/dev/null 2>&1
+    else
+        mkdir -p "$(dirname "$destino")"
+        git clone --depth 1 "https://github.com/$repo.git" "$destino" >/dev/null 2>&1 || { log "no pude descargar $repo"; return 1; }
+    fi
+    printf '%s\n' "$destino"
+}
+
+# Paquetes que pide el instalador del repo (solo se LEE la lista)
+paquetes_del_repo() {
+    local dir="$1" f
+    for f in "$dir"/RiceInstaller "$dir"/install.sh "$dir"/install "$dir"/setup.sh "$dir"/Install*; do
+        [ -f "$f" ] || continue
+        grep -hoE '^[[:space:]]*([a-z]+_)?(dependencies|deps|packages|pkgs)="[^"]+"' "$f" | sed -E 's/^[^"]*"//; s/"$//'
+    done | tr ' ' '\n' | grep -E '^[a-z0-9][a-z0-9@._+-]*$' | sort -u | grep -vxF -f <(printf '%s\n' $NO_NECESARIOS)
+}
+
+clasificar() {   # imprime "oficial <pkg>", "aur <pkg>" o "ya <pkg>"
+    local p
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        if pacman -Qq "$p" >/dev/null 2>&1; then printf 'ya %s\n' "$p"
+        elif pacman -Si "$p" >/dev/null 2>&1; then printf 'oficial %s\n' "$p"
+        else printf 'aur %s\n' "$p"; fi
+    done
+}
+
+configs() {   # imprime "copiar <app>" o "existe <app>"
+    local dir="$1" d app
+    [ -d "$dir/config" ] || return 0
+    for d in "$dir"/config/*/; do
+        app="$(basename "$d")"
+        case " $EXCLUIR_CONFIG " in *" $app "*) continue ;; esac
+        if [ -e "$HOME/.config/$app" ]; then printf 'existe %s\n' "$app"; else printf 'copiar %s\n' "$app"; fi
+    done
+}
+
+revisar() {
+    local dir; dir="$(repo_local "$1")" || return 1
+    local lista; lista="$(paquetes_del_repo "$dir" | clasificar)"
+    printf 'Paquetes oficiales a instalar: %s\n' "$(printf '%s\n' "$lista" | awk '$1=="oficial"{printf "%s ", $2}')"
+    printf 'Paquetes de AUR a instalar:    %s\n' "$(printf '%s\n' "$lista" | awk '$1=="aur"{printf "%s ", $2}')"
+    printf 'Ya instalados:                 %s\n' "$(printf '%s\n' "$lista" | awk '$1=="ya"{n++} END{print n+0}')"
+    printf 'Configuración que se copia:    %s\n' "$(configs "$dir" | awk '$1=="copiar"{printf "%s ", $2}')"
+    printf 'Se deja la tuya (ya existe):   %s\n' "$(configs "$dir" | awk '$1=="existe"{printf "%s ", $2}')"
+}
+
+instalar() {
+    local dir; dir="$(repo_local "$1")" || return 1
+    local lista oficiales aur
+    lista="$(paquetes_del_repo "$dir" | clasificar)"
+    mapfile -t oficiales < <(printf '%s\n' "$lista" | awk '$1=="oficial"{print $2}')
+    mapfile -t aur < <(printf '%s\n' "$lista" | awk '$1=="aur"{print $2}')
+
+    if [ "${#oficiales[@]}" -gt 0 ]; then
+        log "instalando ${#oficiales[@]} paquetes oficiales…"
+        if command -v pkexec >/dev/null; then pkexec pacman -S --needed --noconfirm "${oficiales[@]}"
+        else sudo pacman -S --needed --noconfirm "${oficiales[@]}"; fi || log "algunos paquetes oficiales no se instalaron"
+    fi
+    if [ "${#aur[@]}" -gt 0 ]; then
+        local ayudante; ayudante="$(command -v paru || command -v yay || true)"
+        if [ -n "$ayudante" ]; then
+            log "instalando ${#aur[@]} paquetes de AUR con $(basename "$ayudante")…"
+            local p
+            for p in "${aur[@]}"; do
+                "$ayudante" -S --needed --noconfirm "$p" >/dev/null 2>&1 && log "  ✓ $p" || log "  ✗ $p (no está en AUR o falló)"
+            done
+        else
+            log "faltan de AUR (instálalos a mano): ${aur[*]}"
+        fi
+    fi
+
+    local app copiadas=0
+    while read -r accion app; do
+        [ "$accion" = copiar ] || continue
+        cp -a "$dir/config/$app" "$HOME/.config/$app" && copiadas=$((copiadas + 1))
+    done < <(configs "$dir")
+    # scripts y binarios del rice que se lanzan desde su configuración
+    [ -d "$dir/home/.local/bin" ] && mkdir -p "$HOME/.local/bin" && cp -an "$dir/home/.local/bin/." "$HOME/.local/bin/" 2>/dev/null
+    log "configuración copiada: $copiadas carpetas (las que ya tenías se han dejado igual)"
+
+    local sesion=""
+    for s in /usr/share/xsessions/*.desktop /usr/share/wayland-sessions/*.desktop; do
+        [ -f "$s" ] || continue
+        case "$(basename "$s")" in bspwm*|i3*|awesome*|qtile*|openbox*|herbstluft*|dwm*) sesion="$(sed -n 's/^Name=//p' "$s" | head -1)";; esac
+    done
+    printf 'listo %s: cierra sesión y en la pantalla de inicio elige «%s»\n' "$1" "${sesion:-el nuevo escritorio}"
+}
+
+case "${1:-}" in
+    revisar)  [ -n "${2:-}" ] || { log "uso: hyprbazar-escritorio revisar <owner/repo>"; exit 1; }; revisar "$2" ;;
+    instalar) [ -n "${2:-}" ] || { log "uso: hyprbazar-escritorio instalar <owner/repo>"; exit 1; }; instalar "$2" ;;
+    *) sed -n '2,17p' "$0"; exit 1 ;;
+esac

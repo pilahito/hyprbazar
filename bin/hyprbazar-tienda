@@ -60,7 +60,7 @@ traducir() {
 
 # ───────────────────────── buscar ───────────────────────────────────────────
 buscar() {
-    local consulta="${1:-hyprland dotfiles}"
+    local consulta="${1:-dotfiles rice theme}"
     local q
     q="$(printf '%s' "$consulta" | jq -sRr @uri)"
     local json
@@ -99,7 +99,7 @@ buscar() {
 
 # versión simple y fiable: una línea JSON por repo, con "descripcion_es" y banner
 buscar_simple() {
-    local consulta="${1:-hyprland dotfiles}"
+    local consulta="${1:-dotfiles rice theme}"
     python3 - "$consulta" "$TRAD" "$TOKEN" <<'PYEOF'
 import json, re, sys, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -129,7 +129,7 @@ items = datos.get("items", [])
 def _es_hypr(it):
     txt = " ".join([it.get("full_name") or "", it.get("description") or "", " ".join(it.get("topics") or [])]).lower()
     return "hypr" in txt
-items.sort(key=lambda it: 0 if _es_hypr(it) else 1)
+# sin dar prioridad a Hyprland: se busca de todo y se ordena por estrellas
 
 def traducir(texto):
     if not texto:

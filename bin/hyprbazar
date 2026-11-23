@@ -527,6 +527,8 @@ PESTANAS = (
 TIENDA = _local_bin("hyprbazar-tienda", "tienda")
 PACKS_BIN = _local_bin("hyprbazar-packs", "hyprbazar-packs")
 SISTEMA_BIN = _local_bin("hyprbazar-sistema", "hyprbazar-sistema")
+ESCRITORIO_BIN = _local_bin("hyprbazar-escritorio", "hyprbazar-escritorio")
+OTROS_ESCRITORIOS = re.compile(r"\b(bspwm|i3wm|i3-?wm|i3|awesome ?wm|awesome|qtile|openbox|dwm|herbstluftwm|xmonad|sway|river|niri)\b", re.I)
 CACHE_GALERIA = Path.home() / ".cache" / "hyprbazar" / "galeria"
 ANIMADOS = Path.home() / "Imágenes" / "Wallpapers" / "Animados"
 # Nada de fondos estilo "hacker" (lluvia digital, Matrix, código…): a David no le gustan
@@ -3042,14 +3044,17 @@ class TiendaPage(Gtk.Box):
 
     # nombre visible, búsqueda en GitHub y explicación (en el tooltip)
     CATEGORIAS = [
-        ("Todo", "hyprland themes", "Temas de todo tipo, sin filtrar"),
-        ("Escritorios", "hyprland dotfiles rice",
-         "Rices: escritorios enteros ya montados (barras, widgets, colores…), listos para copiar ideas"),
-        ("Fondos", "hyprland wallpapers", "Solo fondos de pantalla"),
-        ("Barras", "quickshell hyprland shell",
-         "Shells: programas que dibujan la barra, el dock y los widgets (quickshell, ags, eww)"),
-        ("Catppuccin", "catppuccin hyprland",
-         "Catppuccin: la paleta pastel más popular, con temas para casi todo"),
+        ("Todo", "dotfiles rice theme", "Temas y escritorios de cualquier entorno, sin filtrar"),
+        ("Hyprland", "hyprland dotfiles rice", "Escritorios y temas hechos para Hyprland"),
+        ("BSPWM / i3", "bspwm i3 dotfiles rice", "Rices de BSPWM, i3 y otros gestores de ventanas"),
+        ("GNOME / KDE", "gnome kde plasma theme", "Temas para GNOME y KDE Plasma"),
+        ("Apps (GTK)", "gtk theme", "Temas de aplicaciones GTK"),
+        ("Iconos", "icon theme linux", "Packs de iconos"),
+        ("Cursores", "cursor theme linux", "Cursores del ratón"),
+        ("Fondos", "wallpapers collection", "Solo fondos de pantalla"),
+        ("Barras", "quickshell eww ags waybar polybar",
+         "Shells y barras: quickshell, eww, ags, waybar, polybar"),
+        ("Catppuccin", "catppuccin", "Catppuccin: la paleta pastel más popular, con temas para casi todo"),
         ("Instalados", None,
          "Los temas que ya tienes descargados en este equipo: aplícalos sin volver a bajarlos"),
     ]
@@ -3171,7 +3176,7 @@ class TiendaPage(Gtk.Box):
             return set()
 
     def on_buscar(self, *_):
-        consulta = self.busqueda.get_text().strip() or "hyprland themes"
+        consulta = self.busqueda.get_text().strip() or "dotfiles rice theme"
         self.buscar(consulta)
 
     def buscar(self, consulta):
@@ -3308,6 +3313,15 @@ class TiendaPage(Gtk.Box):
         ver.add_css_class("flat")
         ver.connect("clicked", lambda *_, u=r.get("url", ""): abrir_url(u))
         acciones.append(ver)
+
+        # rices de otros escritorios (BSPWM, i3…): instalarlos enteros como escritorio aparte
+        texto_repo = f"{repo} {r.get('descripcion', '')}"
+        if OTROS_ESCRITORIOS.search(texto_repo) and "hypr" not in texto_repo.lower():
+            completo = Gtk.Button(label="Escritorio completo")
+            completo.set_tooltip_text("Instala este escritorio aparte con sus paquetes y su configuración; "
+                                      "tu Hyprland no se toca y eliges cuál usar al iniciar sesión")
+            completo.connect("clicked", lambda *_, rr=repo: self.escritorio_completo(rr))
+            acciones.append(completo)
         caja.append(acciones)
 
         # ── aplicar el aspecto del repo (colores y formas, nada de binds) ──
@@ -3688,6 +3702,42 @@ class TiendaPage(Gtk.Box):
         self.estado.set_text(f"Tema {nombre} aplicado")
         self.ventana.pagina_paletas.cargar()
         self.mostrar_instalados()
+        return False
+
+    def escritorio_completo(self, repo):
+        """Enseña qué se instalaría y, si lo aceptas, lo instala en una terminal visible."""
+        self.estado.set_text(f"Revisando qué necesita {repo}…")
+
+        def trabajo():
+            try:
+                r = subprocess.run([str(ESCRITORIO_BIN), "revisar", repo], capture_output=True, text=True, timeout=600)
+                resumen = (r.stdout or r.stderr).strip()
+            except Exception as e:
+                resumen = f"No pude revisarlo: {e}"
+            GLib.idle_add(self._confirmar_escritorio, repo, resumen)
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _confirmar_escritorio(self, repo, resumen):
+        self.estado.set_text("")
+        dialogo = Gtk.AlertDialog(message=f"Instalar {repo} como escritorio aparte",
+                                  detail=resumen + "\n\nSe abrirá una terminal para que veas el progreso y escribas tu contraseña.")
+        dialogo.set_buttons(["Cancelar", "Instalar"])
+        dialogo.set_cancel_button(0)
+        dialogo.set_default_button(1)
+
+        def respuesta(d, res):
+            try:
+                if d.choose_finish(res) == 1:
+                    terminal = shutil.which("kitty") or shutil.which("alacritty") or shutil.which("foot")
+                    if terminal:
+                        subprocess.Popen([terminal, "--hold", "-e", str(ESCRITORIO_BIN), "instalar", repo]
+                                         if "kitty" in terminal else [terminal, "-e", str(ESCRITORIO_BIN), "instalar", repo])
+                        self.estado.set_text("Instalando en la terminal; al terminar, cierra sesión y elige el escritorio nuevo.")
+                    else:
+                        self.estado.set_text(f"Ejecuta en una terminal: hyprbazar-escritorio instalar {repo}")
+            except Exception:
+                pass
+        dialogo.choose(self.ventana, None, respuesta)
         return False
 
     def ver_capturas(self, r):
