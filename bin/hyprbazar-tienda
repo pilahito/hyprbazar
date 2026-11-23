@@ -122,6 +122,45 @@ headers = {"Accept": "application/vnd.github+json", "User-Agent": "tienda-dsh"}
 if token:
     headers["Authorization"] = "Bearer " + token
 
+# ── OpenDesktop (gnome-look, store.kde.org, pling): «od:<tipo> palabras» ──
+OD_CATEGORIAS = {"gtk": "135", "iconos": "132", "cursores": "107", "kvantum": "123",
+                 "fondos": "295", "gnome": "134", "plasma": "722"}
+if consulta.startswith("od:"):
+    tipo, _, palabras = consulta[3:].partition(" ")
+    cat = OD_CATEGORIAS.get(tipo.strip().lower(), "135")
+    url = ("https://api.opendesktop.org/ocs/v1/content/data?format=json&sortmode=high&pagesize=24&categories=" + cat
+           + ("&search=" + urllib.parse.quote(palabras.strip()) if palabras.strip() else ""))
+    try:
+        datos = pet(url, {"User-Agent": "HyprBazar"})
+        items = datos.get("data") or []
+    except Exception:
+        items = []
+    try:
+        cache = json.load(open(fichero_cache, encoding="utf-8"))
+    except Exception:
+        cache = {}
+    def texto_plano(h):
+        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", h or "")).strip()[:300]
+    for it in items:
+        imgs = [it[k] for k in sorted(it) if k.startswith("previewpic") and it.get(k)]
+        desc = texto_plano(it.get("description") or it.get("summary"))
+        print(json.dumps({
+            "repo": "od:" + str(it.get("id")),
+            "nombre": it.get("name") or "",
+            "estrellas": int(float(it.get("score") or 0)),
+            "descripcion": desc,
+            "descripcion_es": cache.get(desc, desc),
+            "avatar": it.get("smallpreviewpic1") or "",
+            "url": it.get("detailpage") or "https://www.opendesktop.org",
+            "banner": imgs[0] if imgs else "",
+            "imagen": imgs[0] if imgs else "",
+            "capturas": imgs,
+            "temas": [it.get("typename") or "OpenDesktop"],
+            "lenguaje": "OpenDesktop",
+            "actualizado": (it.get("changed") or "")[:10],
+        }, ensure_ascii=False))
+    sys.exit(0)
+
 q = urllib.parse.quote(consulta)
 datos = pet("https://api.github.com/search/repositories?q=" + q + "&sort=stars&order=desc&per_page=24", headers)
 items = datos.get("items", [])
@@ -350,6 +389,45 @@ PYGEN
     done < <(find "$raiz" \( -path '*/themes/*.lua' -o -path '*/themes/*.conf' \) -not -path "*/.git/*" 2>/dev/null)
 }
 
+# Instala un contenido de OpenDesktop (od:<id>): baja sus archivos y copia temas o fondos.
+instalar_od() {
+    local id="${1#od:}" info tmp n=0 nombre sistema=0 fondos=0 tipos=()
+    info="$(curl -sS -m 30 -H 'User-Agent: HyprBazar' "https://api.opendesktop.org/ocs/v1/content/data/$id?format=json")" || { log "no pude leer od:$id"; return 1; }
+    nombre="$(printf '%s' "$info" | jq -r '.data[0].name // empty' | tr '/' '-')"
+    [ -n "$nombre" ] || { log "no existe od:$id"; return 1; }
+    local repo="$nombre" slug="od-$id"
+    tmp="$(mktemp -d)"
+    while IFS=$'\t' read -r url archivo tam; do
+        [ -n "$url" ] || continue
+        [ "${tam:-0}" -lt 204800 ] || continue          # < 200 MB (el tamaño viene en KB)
+        n=$((n + 1)); [ "$n" -le 8 ] || break
+        log "bajando $archivo…"
+        local f="$tmp/$archivo" dir="$tmp/x$n" base="${archivo%%.tar.*}"; base="${base%.zip}"; base="${base%.tgz}"
+        curl -sSL -m 600 -o "$f" "$url" || continue
+        case "$archivo" in
+            *.png|*.jpg|*.jpeg|*.webp|*.gif)
+                mk "$FONDOS/opendesktop/$nombre"; cp -f "$f" "$FONDOS/opendesktop/$nombre/" && fondos=$((fondos + 1)) ;;
+            *.zip) mk "$dir"; unzip -q -o "$f" -d "$dir" 2>/dev/null; copiar_temas_sistema "$dir" "$base" ;;
+            *.tar*|*.tgz) mk "$dir"; tar -xf "$f" -C "$dir" 2>/dev/null; copiar_temas_sistema "$dir" "$base" ;;
+        esac
+    done < <(printf '%s' "$info" | python3 -I -c '
+import json, sys
+d = json.load(sys.stdin)["data"][0]
+for k in sorted(d):
+    if k.startswith("downloadlink") and d[k]:
+        i = k[len("downloadlink"):]
+        print(d[k], d.get("downloadname" + i) or ("archivo" + i), d.get("downloadsize" + i) or 0, sep="\t")
+')
+    rm -rf "$tmp"
+    mk "$DATOS/$slug"; printf 'od:%s\t%s\n' "$id" "$nombre" > "$DATOS/$slug/opendesktop.txt"
+    if [ "${#tipos[@]}" -gt 0 ] && [ "${SIN_DEPS:-0}" != "1" ]; then
+        local sis; sis="$(command -v hyprbazar-sistema || printf '%s' "$(dirname "$(readlink -f "$0")")/hyprbazar-sistema")"
+        mapfile -t tipos < <(printf '%s\n' "${tipos[@]}" | sort -u)
+        [ -x "$sis" ] && "$sis" instalar-deps "${tipos[@]}"
+    fi
+    printf 'instalado od:%s: 0 paletas, %s fondos, %s temas del sistema\n' "$id" "$fondos" "$sistema"
+}
+
 instalar() {
     local repo="$1" slug destino
     slug="$(printf '%s' "$repo" | tr '/' '-')"
@@ -532,8 +610,11 @@ PYRICE
 instalados() {
     local d
     for d in "$DATOS"/*/; do
-        [ -d "$d/.git" ] || continue
-        printf '%s\n' "$(basename "$d")"
+        if [ -d "$d/.git" ]; then
+            printf '%s\n' "$(basename "$d")"
+        elif [ -f "$d/opendesktop.txt" ]; then      # instalados desde OpenDesktop
+            printf '%s\n' "$(basename "$d")"
+        fi
     done
 }
 
@@ -545,7 +626,11 @@ case "${1:-}" in
             [ "$1" = "--solo-paletas" ] && SOLO_PALETAS=1
             shift
         done
-        [ -n "${1:-}" ] && instalar "$1" || { log "uso: tienda instalar [--solo-paletas] owner/repo"; exit 1; } ;;
+        case "${1:-}" in
+            od:*) instalar_od "$1" ;;
+            "")   log "uso: tienda instalar [--solo-paletas] owner/repo | od:<id>"; exit 1 ;;
+            *)    instalar "$1" ;;
+        esac ;;
     instalados) instalados ;;
     *) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
