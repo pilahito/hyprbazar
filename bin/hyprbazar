@@ -5470,10 +5470,10 @@ class App(Gtk.Application):
     def do_activate(self):
         if self.ventana is None:
             self.ventana = Ventana(self)
-        else:
-            # si estaba minimizada (escritorio especial «minimized»), traerla al escritorio activo
-            GLib.idle_add(_traer_al_escritorio_activo)
         self.ventana.present()
+        # si se abre o estaba en un escritorio especial (p. ej. el de minimizadas
+        # abierto), llevarla al escritorio normal donde estás
+        GLib.timeout_add(450, _traer_al_escritorio_activo)
         # Ventana opaca: el escritorio vuelve semitransparentes las ventanas y
         # se leía el texto de lo que hay detrás. Se pide solo para HyprBazar.
         GLib.timeout_add(600, _hacer_opaca)
