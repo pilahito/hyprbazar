@@ -21,7 +21,9 @@ español y sin tocar tu configuración.
 | **Fondos de pantalla** | todos tus fondos con su miniatura; un clic lo pone en todos los monitores y DMS recolorea el escritorio a partir de él |
 | **Temas de color** | paletas completas (Catppuccin, Dracula, Nord, Tokyo Night, Kanagawa, Arch…) con **vista previa generada**; aplica bordes, esquinas, huecos, desenfoque, barra de título y colores de kitty |
 | **Complementos** | estado de los plugins de Hyprland (hyprbars, borders-plus-plus, hyprfocus, csgo-vulkan-fix): activarlos, desactivarlos, recompilarlos y actualizar sus fuentes |
-| **Tienda** | busca temas en GitHub, muestra la **captura real** de cada repo, **traduce la descripción al español** y descarga solo lo aprovechable (paletas y fondos) |
+| **Tienda** | busca temas en GitHub, muestra la **captura real** de cada repo, **traduce la descripción al español** y descarga lo aprovechable (paletas, fondos y temas GTK, de iconos, cursores y Kvantum) e **instala solo sus dependencias** desde los repos oficiales de Arch |
+| **Temas del sistema** | temas de **aplicaciones GTK**, **iconos**, **cursores** y **apps Qt (Kvantum)**: elige y aplica cada uno; botón para instalar lo que necesitan |
+| **Editar colores** | en cada tema de color, **Editar colores** abre un editor y lo guarda como **tema propio** |
 
 Y dos cosas que casi nadie hace bien:
 

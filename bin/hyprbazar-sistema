@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# hyprbazar-sistema — temas del sistema (no solo Hyprland): GTK, iconos,
+# cursores y Kvantum (apps Qt). Lista los instalados, dice cuáles están puestos,
+# los aplica y prepara las dependencias que cada tipo necesita para verse bien.
+#
+# Uso:
+#   hyprbazar-sistema listar               tipo<TAB>nombre<TAB>ruta de cada tema instalado
+#   hyprbazar-sistema actual               tipo<TAB>nombre de los temas puestos ahora
+#   hyprbazar-sistema aplicar <tipo> <nombre>
+#   hyprbazar-sistema deps <tipo>...       paquetes que faltan para esos tipos (uno por línea)
+#   hyprbazar-sistema instalar-deps <tipo>...   instala los que falten (pide tu contraseña)
+#
+# Tipos: gtk, iconos, cursor, kvantum.
+set -uo pipefail
+
+log() { printf '%s\n' "$*" >&2; }
+
+# Dependencias fijas por tipo, solo de los repositorios oficiales de Arch.
+# Nunca se ejecutan scripts de instalación de los repos descargados.
+deps_de() {
+    case "$1" in
+        gtk)     printf '%s\n' gtk-engine-murrine gnome-themes-extra ;;
+        iconos)  printf '%s\n' hicolor-icon-theme ;;
+        cursor)  printf '%s\n' xcursor-themes ;;
+        kvantum) printf '%s\n' kvantum qt5ct qt6ct ;;
+    esac
+}
+
+DIRS_TEMAS=("$HOME/.themes" "$HOME/.local/share/themes" /usr/share/themes)
+DIRS_ICONOS=("$HOME/.icons" "$HOME/.local/share/icons" /usr/share/icons)
+DIR_KVANTUM="$HOME/.config/Kvantum"
+
+listar() {
+    local d t
+    for d in "${DIRS_TEMAS[@]}"; do
+        [ -d "$d" ] || continue
+        for t in "$d"/*/; do
+            t="${t%/}"
+            [ -d "$t/gtk-3.0" ] || [ -d "$t/gtk-4.0" ] || continue
+            printf 'gtk\t%s\t%s\n' "$(basename "$t")" "$t"
+        done
+    done
+    for d in "${DIRS_ICONOS[@]}"; do
+        [ -d "$d" ] || continue
+        for t in "$d"/*/; do
+            t="${t%/}"
+            if [ -d "$t/cursors" ]; then
+                printf 'cursor\t%s\t%s\n' "$(basename "$t")" "$t"
+            elif [ -f "$t/index.theme" ] && grep -q '^\[Icon Theme\]' "$t/index.theme" 2>/dev/null \
+                 && [ "$(basename "$t")" != default ] && [ "$(basename "$t")" != hicolor ]; then
+                printf 'iconos\t%s\t%s\n' "$(basename "$t")" "$t"
+            fi
+        done
+    done
+    if [ -d "$DIR_KVANTUM" ]; then
+        for t in "$DIR_KVANTUM"/*/; do
+            t="${t%/}"
+            ls "$t"/*.kvconfig >/dev/null 2>&1 && printf 'kvantum\t%s\t%s\n' "$(basename "$t")" "$t"
+        done
+    fi
+}
+
+gs() { gsettings get org.gnome.desktop.interface "$1" 2>/dev/null | tr -d "'"; }
+
+actual() {
+    printf 'gtk\t%s\n' "$(gs gtk-theme)"
+    printf 'iconos\t%s\n' "$(gs icon-theme)"
+    printf 'cursor\t%s\n' "$(gs cursor-theme)"
+    local kv=""
+    [ -f "$DIR_KVANTUM/kvantum.kvconfig" ] && kv="$(sed -n 's/^theme=//p' "$DIR_KVANTUM/kvantum.kvconfig" | head -1)"
+    printf 'kvantum\t%s\n' "$kv"
+}
+
+aplicar() {
+    local tipo="$1" nombre="$2"
+    case "$tipo" in
+        gtk)
+            gsettings set org.gnome.desktop.interface gtk-theme "$nombre"
+            # GTK4/libadwaita lee también estos archivos
+            mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"
+            for f in "$HOME/.config/gtk-3.0/settings.ini" "$HOME/.config/gtk-4.0/settings.ini"; do
+                [ -f "$f" ] || printf '[Settings]\n' > "$f"
+                if grep -q '^gtk-theme-name=' "$f"; then
+                    sed -i "s|^gtk-theme-name=.*|gtk-theme-name=$nombre|" "$f"
+                else
+                    sed -i "/^\[Settings\]/a gtk-theme-name=$nombre" "$f"
+                fi
+            done ;;
+        iconos)
+            gsettings set org.gnome.desktop.interface icon-theme "$nombre" ;;
+        cursor)
+            gsettings set org.gnome.desktop.interface cursor-theme "$nombre"
+            command -v hyprctl >/dev/null && hyprctl setcursor "$nombre" "$(gsettings get org.gnome.desktop.interface cursor-size 2>/dev/null || echo 24)" >/dev/null 2>&1 ;;
+        kvantum)
+            if command -v kvantummanager >/dev/null; then
+                kvantummanager --set "$nombre" >/dev/null 2>&1
+            else
+                mkdir -p "$DIR_KVANTUM"
+                printf '[General]\ntheme=%s\n' "$nombre" > "$DIR_KVANTUM/kvantum.kvconfig"
+            fi ;;
+        *) log "tipo desconocido: $tipo"; return 1 ;;
+    esac
+    log "puesto: $tipo → $nombre"
+}
+
+faltan() {
+    local tipo p
+    for tipo in "$@"; do
+        while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            pacman -Qq "$p" >/dev/null 2>&1 || printf '%s\n' "$p"
+        done < <(deps_de "$tipo")
+    done | sort -u
+}
+
+instalar_deps() {
+    local pkgs
+    mapfile -t pkgs < <(faltan "$@")
+    if [ "${#pkgs[@]}" -eq 0 ]; then
+        log "dependencias: todo listo"
+        return 0
+    fi
+    log "instalando dependencias: ${pkgs[*]}"
+    if command -v pkexec >/dev/null; then
+        pkexec pacman -S --needed --noconfirm "${pkgs[@]}"
+    else
+        sudo pacman -S --needed --noconfirm "${pkgs[@]}"
+    fi
+}
+
+case "${1:-}" in
+    listar)        listar ;;
+    actual)        actual ;;
+    aplicar)       [ $# -eq 3 ] || { log "uso: hyprbazar-sistema aplicar <tipo> <nombre>"; exit 1; }; aplicar "$2" "$3" ;;
+    deps)          shift; faltan "$@" ;;
+    instalar-deps) shift; instalar_deps "$@" ;;
+    *) sed -n '2,13p' "$0"; exit 1 ;;
+esac

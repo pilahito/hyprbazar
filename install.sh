@@ -26,13 +26,20 @@ if [ "${1:-}" = "--check" ]; then
     exit 0
 fi
 
+# Dependencias: en Arch se instalan solas (pide tu contraseña); en otras distros se avisa.
+PAQUETES=(python-gobject gtk4 imagemagick jq curl git glib2 polkit)
 if [ ${#falta[@]} -ne 0 ]; then
-    echo "AVISO: falta ${falta[*]}" >&2
-    echo "       En Arch: sudo pacman -S python-gobject gtk4 imagemagick jq curl git" >&2
+    if command -v pacman >/dev/null 2>&1 && [ "${SIN_DEPS:-0}" != "1" ]; then
+        echo "Instalando dependencias: ${PAQUETES[*]}"
+        sudo pacman -S --needed --noconfirm "${PAQUETES[@]}" || echo "AVISO: no se pudieron instalar; hazlo con: sudo pacman -S ${PAQUETES[*]}" >&2
+    else
+        echo "AVISO: falta ${falta[*]}" >&2
+        echo "       En Arch: sudo pacman -S ${PAQUETES[*]}" >&2
+    fi
 fi
 
 mkdir -p "$BIN" "$APPS"
-for f in hyprbazar hyprbazar-paleta hyprbazar-tienda hyprbazar-tema hyprbazar-packs hyprbazar-teclas teclado-sonido; do
+for f in hyprbazar hyprbazar-paleta hyprbazar-tienda hyprbazar-tema hyprbazar-packs hyprbazar-teclas hyprbazar-sistema teclado-sonido; do
     install -m 755 "$AQUI/bin/$f" "$BIN/$f"
     echo "  $f -> $BIN/$f"
 done

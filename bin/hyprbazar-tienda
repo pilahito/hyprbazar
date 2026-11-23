@@ -294,7 +294,63 @@ instalar() {
         fi
     fi
 
-    printf 'instalado %s: %s paletas, %s fondos\n' "$repo" "$paletas" "$fondos"
+    # ── temas del sistema: GTK, iconos, cursores y Kvantum (no solo Hyprland) ──
+    local sistema=0 tipos=()
+    if [ "${SOLO_PALETAS:-0}" != "1" ] && \
+       gh "$API/repos/$repo/git/trees/HEAD?recursive=1" | jq -r '.tree[]?.path' 2>/dev/null \
+         | grep -qE '(^|/)(gtk-[34]\.0|cursors)/|(^|/)index\.theme$|\.kvconfig$'; then
+        local tam2
+        tam2="$(gh "$API/repos/$repo" | jq -r '.size // 0')"
+        if [ "${tam2:-0}" -lt 300000 ]; then   # < ~300 MB
+            log "tiene temas del sistema; descargando el repo completo…"
+            git -C "$destino" sparse-checkout disable >/dev/null 2>&1 || true
+            local TEMAS_DIR="$HOME/.local/share/themes" ICONOS_DIR="$HOME/.local/share/icons" KV_DIR="$HOME/.config/Kvantum"
+            local d nombre
+            # GTK: carpetas con gtk-3.0/ o gtk-4.0/
+            while IFS= read -r d; do
+                [ -n "$d" ] || continue
+                nombre="$(basename "$d")"; [ "$d" = "$destino" ] && nombre="${repo##*/}"
+                mk "$TEMAS_DIR"; rm -rf "${TEMAS_DIR:?}/$nombre"
+                cp -r "$d" "$TEMAS_DIR/$nombre" && rm -rf "$TEMAS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(gtk); }
+            done < <(find "$destino" -type d \( -name gtk-3.0 -o -name gtk-4.0 \) -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
+            # cursores: carpetas con cursors/
+            while IFS= read -r d; do
+                [ -n "$d" ] || continue
+                nombre="$(basename "$d")"; [ "$d" = "$destino" ] && nombre="${repo##*/}"
+                mk "$ICONOS_DIR"; rm -rf "${ICONOS_DIR:?}/$nombre"
+                cp -r "$d" "$ICONOS_DIR/$nombre" && rm -rf "$ICONOS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(cursor); }
+            done < <(find "$destino" -type d -name cursors -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
+            # iconos: index.theme con [Icon Theme] y sin cursores
+            while IFS= read -r d; do
+                [ -n "$d" ] || continue
+                [ -d "$d/cursors" ] && continue
+                nombre="$(basename "$d")"; [ "$d" = "$destino" ] && nombre="${repo##*/}"
+                mk "$ICONOS_DIR"; rm -rf "${ICONOS_DIR:?}/$nombre"
+                cp -r "$d" "$ICONOS_DIR/$nombre" && rm -rf "$ICONOS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(iconos); }
+            done < <(grep -rl --include=index.theme '^\[Icon Theme\]' "$destino" 2>/dev/null | grep -v '/.git/' | xargs -r -n1 dirname | sort -u)
+            # Kvantum: carpetas con *.kvconfig
+            while IFS= read -r d; do
+                [ -n "$d" ] || continue
+                nombre="$(basename "$d")"; [ "$d" = "$destino" ] && nombre="${repo##*/}"
+                mk "$KV_DIR"; rm -rf "${KV_DIR:?}/$nombre"
+                cp -r "$d" "$KV_DIR/$nombre" && rm -rf "$KV_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(kvantum); }
+            done < <(find "$destino" -name '*.kvconfig' -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
+        else
+            log "el repo es demasiado grande para bajar sus temas del sistema (${tam2} KB)"
+        fi
+    fi
+
+    # ── dependencias para que funcione al 100 % (solo paquetes oficiales de Arch) ──
+    if [ "${#tipos[@]}" -gt 0 ]; then
+        local sis
+        sis="$(command -v hyprbazar-sistema || printf '%s' "$(dirname "$(readlink -f "$0")")/hyprbazar-sistema")"
+        mapfile -t tipos < <(printf '%s\n' "${tipos[@]}" | sort -u)
+        if [ -x "$sis" ] && [ "${SIN_DEPS:-0}" != "1" ]; then
+            "$sis" instalar-deps "${tipos[@]}" || log "no se instalaron las dependencias (puedes hacerlo desde «Temas del sistema»)"
+        fi
+    fi
+
+    printf 'instalado %s: %s paletas, %s fondos, %s temas del sistema\n' "$repo" "$paletas" "$fondos" "$sistema"
 }
 
 instalados() {

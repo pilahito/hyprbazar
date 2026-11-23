@@ -522,9 +522,11 @@ PESTANAS = (
     ("tienda", "Tienda", ("system-software-install-symbolic", "folder-download-symbolic")),
     ("complementos", "Complementos", ("application-x-addon-symbolic", "applications-system-symbolic")),
     ("sonido", "Sonido", ("audio-volume-high-symbolic", "audio-speakers-symbolic")),
+    ("sistema", "Sistema", ("preferences-desktop-theme-symbolic", "preferences-desktop-appearance-symbolic")),
 )
 TIENDA = _local_bin("hyprbazar-tienda", "tienda")
 PACKS_BIN = _local_bin("hyprbazar-packs", "hyprbazar-packs")
+SISTEMA_BIN = _local_bin("hyprbazar-sistema", "hyprbazar-sistema")
 CACHE_GALERIA = Path.home() / ".cache" / "hyprbazar" / "galeria"
 ANIMADOS = Path.home() / "Imágenes" / "Wallpapers" / "Animados"
 # Nada de fondos estilo "hacker" (lluvia digital, Matrix, código…): a David no le gustan
@@ -934,6 +936,9 @@ class Ventana(Gtk.ApplicationWindow):
 
         self.pagina_sonido = SonidoPage(self)
         self.pila.add_titled(self.pagina_sonido, "sonido", "Sonido")
+
+        self.pagina_sistema = SistemaPage(self)
+        self.pila.add_titled(self.pagina_sistema, "sistema", "Temas del sistema")
         self.pila.connect("notify::visible-child", self.on_cambio_pagina)
         self._crear_selector()
 
@@ -1816,7 +1821,15 @@ class PaletasPage(Gtk.Box):
         boton.set_tooltip_text(f"Aplicar el tema {nombre}")
         boton.connect("clicked", lambda *_, i=ident, n=nombre: self.aplicar(i, n))
         self.botones[ident] = boton
-        return boton
+        # debajo de la tarjeta: editar sus colores y guardarla como tema propio
+        contenedor = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        contenedor.append(boton)
+        editar = Gtk.Button(label="Editar colores")
+        editar.add_css_class("flat")
+        editar.set_tooltip_text(f"Cambia los colores de {nombre} y guárdalo como tema propio")
+        editar.connect("clicked", lambda *_, i=ident, n=nombre: EditorPaleta(self, i, n).present())
+        contenedor.append(editar)
+        return contenedor
 
     def filtrar(self):
         texto = self.busqueda.get_text().strip().lower()
@@ -4928,6 +4941,216 @@ def _descargar(url: str, destino: Path) -> bool:
         return r.returncode == 0 and destino.exists() and destino.stat().st_size > 10000
     except Exception:
         return False
+
+
+# ────────────────────────────── temas del sistema ───────────────────────────
+TIPOS_SISTEMA = (
+    ("gtk", "Aplicaciones (GTK)", "El aspecto de las ventanas de GNOME, Nautilus, ajustes…"),
+    ("iconos", "Iconos", "Iconos de apps y carpetas"),
+    ("cursor", "Cursor", "El puntero del ratón"),
+    ("kvantum", "Aplicaciones Qt (Kvantum)", "Dolphin, Kate, apps de KDE y Qt"),
+)
+
+
+class SistemaPage(Gtk.Box):
+    """Temas del sistema, no solo de Hyprland: GTK, iconos, cursores y Kvantum."""
+
+    def __init__(self, ventana):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.ventana = ventana
+        self.desplegables = {}
+        self.actuales = {}
+        self.nombres = {tipo: [] for tipo, *_ in TIPOS_SISTEMA}
+
+        barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        barra.add_css_class("page-toolbar")
+        titulo = Gtk.Label(label="Temas del sistema: aplicaciones, iconos, cursor y apps Qt")
+        titulo.set_xalign(0)
+        titulo.set_hexpand(True)
+        titulo.add_css_class("store-desc")
+        barra.append(titulo)
+        deps = Gtk.Button(label="Instalar lo necesario")
+        deps.set_tooltip_text("Instala los paquetes oficiales que estos temas necesitan para verse al 100 % (pide tu contraseña)")
+        deps.connect("clicked", self.on_deps)
+        barra.append(deps)
+        recargar = Gtk.Button(label="Recargar")
+        recargar.add_css_class("flat")
+        recargar.connect("clicked", lambda *_: self.cargar())
+        barra.append(recargar)
+        self.append(barra)
+
+        rejilla = Gtk.Grid(column_spacing=14, row_spacing=14)
+        rejilla.set_margin_top(18)
+        rejilla.set_margin_bottom(18)
+        rejilla.set_margin_start(24)
+        rejilla.set_margin_end(24)
+        for fila, (tipo, rotulo, ayuda) in enumerate(TIPOS_SISTEMA):
+            caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            r = Gtk.Label(label=rotulo)
+            r.set_xalign(0)
+            r.add_css_class("store-title")
+            a = Gtk.Label(label=ayuda)
+            a.set_xalign(0)
+            a.add_css_class("dim-label")
+            caja.append(r)
+            caja.append(a)
+            rejilla.attach(caja, 0, fila, 1, 1)
+            desplegable = Gtk.DropDown.new_from_strings([])
+            desplegable.set_hexpand(True)
+            self.desplegables[tipo] = desplegable
+            rejilla.attach(desplegable, 1, fila, 1, 1)
+            boton = Gtk.Button(label="Aplicar")
+            boton.add_css_class("suggested-action")
+            boton.connect("clicked", self.on_aplicar, tipo)
+            rejilla.attach(boton, 2, fila, 1, 1)
+        scroll = Gtk.ScrolledWindow(vexpand=True)
+        scroll.set_child(rejilla)
+        self.append(scroll)
+
+        self.estado = Gtk.Label(label="Cargando temas instalados…")
+        self.estado.set_xalign(0)
+        self.estado.add_css_class("status-bar")
+        self.append(self.estado)
+        self.cargar()
+
+    def cargar(self):
+        def trabajo():
+            try:
+                lista = subprocess.run([str(SISTEMA_BIN), "listar"], capture_output=True, text=True, timeout=20).stdout
+                actual = subprocess.run([str(SISTEMA_BIN), "actual"], capture_output=True, text=True, timeout=20).stdout
+            except Exception as e:
+                GLib.idle_add(self.estado.set_text, f"No pude leer los temas: {e}")
+                return
+            GLib.idle_add(self._pintar, lista, actual)
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _pintar(self, lista, actual):
+        nombres = {tipo: [] for tipo, *_ in TIPOS_SISTEMA}
+        for linea in lista.splitlines():
+            partes = linea.split("\t")
+            if len(partes) >= 2 and partes[0] in nombres and partes[1] not in nombres[partes[0]]:
+                nombres[partes[0]].append(partes[1])
+        self.actuales = dict(l.split("\t", 1) for l in actual.splitlines() if "\t" in l)
+        total = 0
+        for tipo, desplegable in self.desplegables.items():
+            lista_tipo = sorted(nombres[tipo], key=str.casefold)
+            self.nombres[tipo] = lista_tipo
+            desplegable.set_model(Gtk.StringList.new(lista_tipo or ["(ninguno instalado)"]))
+            puesto = self.actuales.get(tipo, "")
+            if puesto in lista_tipo:
+                desplegable.set_selected(lista_tipo.index(puesto))
+            total += len(lista_tipo)
+        self.estado.set_text(f"{total} temas del sistema instalados · los de la Tienda aparecen aquí al instalarlos")
+        return False
+
+    def on_aplicar(self, _boton, tipo):
+        lista = self.nombres.get(tipo) or []
+        i = self.desplegables[tipo].get_selected()
+        if not lista or i >= len(lista):
+            self.estado.set_text("No hay ningún tema de ese tipo instalado. Búscalos en la Tienda.")
+            return
+        nombre = lista[i]
+        self.estado.set_text(f"Aplicando {nombre}…")
+
+        def trabajo():
+            r = subprocess.run([str(SISTEMA_BIN), "aplicar", tipo, nombre], capture_output=True, text=True, timeout=30)
+            txt = f"Puesto: {nombre}" if r.returncode == 0 else f"No se pudo aplicar {nombre}: {r.stderr.strip()[-200:]}"
+            GLib.idle_add(self.estado.set_text, txt)
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def on_deps(self, _boton):
+        self.estado.set_text("Instalando lo necesario… (se te pedirá la contraseña)")
+
+        def trabajo():
+            tipos = [t for t, *_ in TIPOS_SISTEMA]
+            r = subprocess.run([str(SISTEMA_BIN), "instalar-deps", *tipos], capture_output=True, text=True, timeout=900)
+            txt = (r.stderr.strip().splitlines() or ["Listo"])[-1] if r.returncode == 0 else "No se instalaron las dependencias"
+            GLib.idle_add(self.estado.set_text, txt)
+        threading.Thread(target=trabajo, daemon=True).start()
+
+
+# ────────────────────────────── editor de paletas ───────────────────────────
+class EditorPaleta(Gtk.Window):
+    """Cambia los colores de una paleta y la guarda como tema propio."""
+
+    def __init__(self, pagina, ident, nombre):
+        super().__init__(title=f"Editar «{nombre}»", modal=True, transient_for=pagina.ventana)
+        self.set_default_size(560, 640)
+        self.pagina, self.ident = pagina, ident
+        try:
+            self.colores = json.loads((PALETAS_DIR / ident / "colors.json").read_text(encoding="utf-8"))
+        except Exception:
+            self.colores = {}
+        self.botones = {}
+
+        caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        caja.set_margin_top(16)
+        caja.set_margin_bottom(16)
+        caja.set_margin_start(16)
+        caja.set_margin_end(16)
+        fila_nombre = Gtk.Box(spacing=8)
+        fila_nombre.append(Gtk.Label(label="Nombre del tema:"))
+        self.entrada = Gtk.Entry(text=f"{nombre} (mío)", hexpand=True)
+        fila_nombre.append(self.entrada)
+        caja.append(fila_nombre)
+
+        rejilla = Gtk.Grid(column_spacing=12, row_spacing=6)
+        fila = 0
+        for clave, valor in self.colores.items():
+            if not (isinstance(valor, str) and valor.startswith("#")):
+                continue
+            etiqueta = Gtk.Label(label=clave.replace("_", " "))
+            etiqueta.set_xalign(0)
+            rgba = Gdk.RGBA()
+            rgba.parse(valor)
+            boton = Gtk.ColorDialogButton.new(Gtk.ColorDialog(with_alpha=False))
+            boton.set_rgba(rgba)
+            self.botones[clave] = boton
+            rejilla.attach(etiqueta, 0, fila, 1, 1)
+            rejilla.attach(boton, 1, fila, 1, 1)
+            fila += 1
+        scroll = Gtk.ScrolledWindow(vexpand=True)
+        scroll.set_child(rejilla)
+        caja.append(scroll)
+
+        acciones = Gtk.Box(spacing=8, halign=Gtk.Align.END)
+        cancelar = Gtk.Button(label="Cancelar")
+        cancelar.connect("clicked", lambda *_: self.close())
+        guardar = Gtk.Button(label="Guardar como tema propio")
+        guardar.add_css_class("suggested-action")
+        guardar.connect("clicked", self.on_guardar)
+        acciones.append(cancelar)
+        acciones.append(guardar)
+        caja.append(acciones)
+        self.set_child(caja)
+
+    @staticmethod
+    def _hex(rgba):
+        return "#{:02x}{:02x}{:02x}".format(*(round(c * 255) for c in (rgba.red, rgba.green, rgba.blue)))
+
+    def on_guardar(self, _boton):
+        nombre = self.entrada.get_text().strip() or "Mi tema"
+        plano = unicodedata.normalize("NFKD", nombre).encode("ascii", "ignore").decode().lower()
+        nuevo_id = "propio--" + (re.sub(r"[^a-z0-9]+", "-", plano).strip("-") or "mi-tema")
+        destino = PALETAS_DIR / nuevo_id
+        destino.mkdir(parents=True, exist_ok=True)
+        colores = dict(self.colores)
+        for clave, boton in self.botones.items():
+            colores[clave] = self._hex(boton.get_rgba())
+        (destino / "colors.json").write_text(json.dumps(colores, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        datos = {}
+        tema = PALETAS_DIR / self.ident / "theme.json"
+        if tema.exists():
+            try:
+                datos = json.loads(tema.read_text(encoding="utf-8"))
+            except Exception:
+                datos = {}
+        datos["name"] = nombre
+        (destino / "theme.json").write_text(json.dumps(datos, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        (destino / "repo.txt").write_text(f"editado a partir de {self.ident}\n", encoding="utf-8")
+        subprocess.Popen([str(PALETA), "previa", nuevo_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.close()
+        GLib.timeout_add(1500, lambda: (self.pagina.cargar(), False)[1])
 
 
 # ────────────────────────────── app ─────────────────────────────────────────
