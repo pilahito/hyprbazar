@@ -10,7 +10,10 @@
 #   hyprbazar-sistema deps <tipo>...       paquetes que faltan para esos tipos (uno por línea)
 #   hyprbazar-sistema instalar-deps <tipo>...   instala los que falten (pide tu contraseña)
 #
-# Tipos: gtk, iconos, cursor, kvantum.
+#   hyprbazar-sistema probar sddm <nombre>      abre el tema de inicio de sesión en una ventana de prueba
+#
+# Tipos: gtk, iconos, cursor, kvantum (de tu usuario) y grub, sddm, plymouth
+# (del sistema: piden tu contraseña, guardan copia y regeneran lo necesario).
 set -uo pipefail
 
 log() { printf '%s\n' "$*" >&2; }
@@ -43,12 +46,20 @@ deps_de() {
         iconos)  printf '%s\n' hicolor-icon-theme ;;
         cursor)  printf '%s\n' xcursor-themes ;;
         kvantum) printf '%s\n' kvantum qt5ct qt6ct ;;
+        grub)     printf '%s\n' grub ;;
+        sddm)     printf '%s\n' sddm qt6-5compat qt6-svg qt6-declarative ;;
+        plymouth) printf '%s\n' plymouth ;;
     esac
 }
 
 DIRS_TEMAS=("$HOME/.themes" "$HOME/.local/share/themes" /usr/share/themes)
 DIRS_ICONOS=("$HOME/.icons" "$HOME/.local/share/icons" /usr/share/icons)
 DIR_KVANTUM="$HOME/.config/Kvantum"
+# temas de arranque/inicio descargados: se guardan aquí y se copian al sistema al aplicarlos
+STAGE="${XDG_DATA_HOME:-$HOME/.local/share}/hyprbazar/sistema"
+SYS_GRUB=/usr/share/grub/themes
+SYS_SDDM=/usr/share/sddm/themes
+SYS_PLYMOUTH=/usr/share/plymouth/themes
 
 listar() {
     local d t
@@ -79,6 +90,27 @@ listar() {
             ls "$t"/*.kvconfig >/dev/null 2>&1 && printf 'kvantum\t%s\t%s\n' "$(basename "$t")" "$t"
         done
     fi
+    # del sistema (los instalados primero; los descargados que aún no se han copiado, después)
+    local vistos=" "
+    for d in "$SYS_GRUB" /boot/grub/themes "$STAGE/grub"; do
+        for t in "$d"/*/; do t="${t%/}"; [ -f "$t/theme.txt" ] || continue
+            case "$vistos" in *" grub:$(basename "$t") "*) continue ;; esac; vistos+="grub:$(basename "$t") "
+            printf 'grub\t%s\t%s\n' "$(basename "$t")" "$t"; done
+    done
+    for d in "$SYS_SDDM" "$STAGE/sddm"; do
+        for t in "$d"/*/; do t="${t%/}"; [ -f "$t/metadata.desktop" ] || continue
+            case "$vistos" in *" sddm:$(basename "$t") "*) continue ;; esac; vistos+="sddm:$(basename "$t") "
+            printf 'sddm\t%s\t%s\n' "$(basename "$t")" "$t"; done
+    done
+    for d in "$SYS_PLYMOUTH" "$STAGE/plymouth"; do
+        for t in "$d"/*/; do t="${t%/}"; ls "$t"/*.plymouth >/dev/null 2>&1 || continue
+            case "$vistos" in *" plymouth:$(basename "$t") "*) continue ;; esac; vistos+="plymouth:$(basename "$t") "
+            printf 'plymouth\t%s\t%s\n' "$(basename "$t")" "$t"; done
+    done
+}
+
+ruta_de() {   # carpeta de un tema de sistema por tipo y nombre
+    listar | awk -F'\t' -v t="$1" -v n="$2" '$1==t && $2==n {print $3; exit}'
 }
 
 gs() { gsettings get org.gnome.desktop.interface "$1" 2>/dev/null | tr -d "'"; }
@@ -90,6 +122,62 @@ actual() {
     local kv=""
     [ -f "$DIR_KVANTUM/kvantum.kvconfig" ] && kv="$(sed -n 's/^theme=//p' "$DIR_KVANTUM/kvantum.kvconfig" | head -1)"
     printf 'kvantum\t%s\n' "$kv"
+    local g="" s="" p=""
+    g="$(sed -n 's/^GRUB_THEME=//p' /etc/default/grub 2>/dev/null | tr -d '"' | head -1)"
+    [ -n "$g" ] && g="$(basename "$(dirname "$g")")"
+    s="$(cat /etc/sddm.conf /etc/sddm.conf.d/*.conf 2>/dev/null | sed -n 's/^Current=//p' | tail -1)"
+    command -v plymouth-set-default-theme >/dev/null && p="$(plymouth-set-default-theme 2>/dev/null)"
+    printf 'grub\t%s\nsddm\t%s\nplymouth\t%s\n' "$g" "$s" "$p"
+}
+
+# Temas del sistema: todo en UNA orden como administrador (una sola contraseña).
+aplicar_sistema() {
+    local tipo="$1" nombre="$2" src script
+    src="$(ruta_de "$tipo" "$nombre")"
+    [ -n "$src" ] || { log "no encuentro el tema $tipo «$nombre»"; return 1; }
+    script="$(mktemp)"
+    case "$tipo" in
+        grub) cat > "$script" <<EOS
+set -e
+[ "$src" = "$SYS_GRUB/$nombre" ] || { mkdir -p "$SYS_GRUB"; rm -rf "$SYS_GRUB/$nombre"; cp -r "$src" "$SYS_GRUB/$nombre"; }
+[ -e /etc/default/grub.antes-hyprbazar ] || cp -p /etc/default/grub /etc/default/grub.antes-hyprbazar
+[ -e /boot/grub/grub.cfg.antes-hyprbazar ] || cp -p /boot/grub/grub.cfg /boot/grub/grub.cfg.antes-hyprbazar
+if grep -q '^GRUB_THEME=' /etc/default/grub; then
+    sed -i 's|^GRUB_THEME=.*|GRUB_THEME="$SYS_GRUB/$nombre/theme.txt"|' /etc/default/grub
+else
+    printf 'GRUB_THEME="%s"\n' "$SYS_GRUB/$nombre/theme.txt" >> /etc/default/grub
+fi
+grub-mkconfig -o /boot/grub/grub.cfg
+EOS
+        ;;
+        sddm) cat > "$script" <<EOS
+set -e
+[ "$src" = "$SYS_SDDM/$nombre" ] || { mkdir -p "$SYS_SDDM"; rm -rf "$SYS_SDDM/$nombre"; cp -r "$src" "$SYS_SDDM/$nombre"; }
+mkdir -p /etc/sddm.conf.d
+printf '[Theme]\nCurrent=%s\n' "$nombre" > /etc/sddm.conf.d/zz-hyprbazar.conf
+EOS
+        ;;
+        plymouth) cat > "$script" <<EOS
+set -e
+command -v plymouth-set-default-theme >/dev/null || { echo "Falta plymouth: instálalo desde «Instalar lo necesario»"; exit 1; }
+[ "$src" = "$SYS_PLYMOUTH/$nombre" ] || { mkdir -p "$SYS_PLYMOUTH"; rm -rf "$SYS_PLYMOUTH/$nombre"; cp -r "$src" "$SYS_PLYMOUTH/$nombre"; }
+plymouth-set-default-theme -R "$nombre"
+EOS
+        ;;
+    esac
+    chmod 644 "$script"
+    como_root bash "$script"; local r=$?
+    rm -f "$script"
+    [ $r -eq 0 ] && log "puesto: $tipo → $nombre" || log "no se pudo poner $tipo «$nombre»"
+    return $r
+}
+
+probar_sddm() {
+    local src greeter
+    src="$(ruta_de sddm "$1")"; [ -n "$src" ] || { log "no encuentro el tema «$1»"; return 1; }
+    greeter="$(command -v sddm-greeter-qt6 || command -v sddm-greeter || true)"
+    [ -n "$greeter" ] || { log "falta sddm"; return 1; }
+    "$greeter" --test-mode --theme "$src"
 }
 
 # Copia de seguridad, una sola vez, de los archivos que se van a tocar
@@ -103,6 +191,7 @@ respaldar() {
 
 aplicar() {
     local tipo="$1" nombre="$2"
+    case "$tipo" in grub|sddm|plymouth) aplicar_sistema "$tipo" "$nombre"; return ;; esac
     respaldar "$HOME/.config/gtk-3.0/settings.ini" "$HOME/.config/gtk-4.0/settings.ini" "$DIR_KVANTUM/kvantum.kvconfig"
     case "$tipo" in
         gtk)
@@ -159,7 +248,8 @@ case "${1:-}" in
     listar)        listar ;;
     actual)        actual ;;
     aplicar)       [ $# -eq 3 ] || { log "uso: hyprbazar-sistema aplicar <tipo> <nombre>"; exit 1; }; aplicar "$2" "$3" ;;
+    probar)        [ "${2:-}" = sddm ] && [ -n "${3:-}" ] || { log "uso: hyprbazar-sistema probar sddm <nombre>"; exit 1; }; probar_sddm "$3" ;;
     deps)          shift; faltan "$@" ;;
     instalar-deps) shift; instalar_deps "$@" ;;
-    *) sed -n '2,13p' "$0"; exit 1 ;;
+    *) sed -n '2,17p' "$0"; exit 1 ;;
 esac

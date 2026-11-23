@@ -124,7 +124,8 @@ if token:
 
 # ── OpenDesktop (gnome-look, store.kde.org, pling): «od:<tipo> palabras» ──
 OD_CATEGORIAS = {"gtk": "135", "iconos": "132", "cursores": "107", "kvantum": "123",
-                 "fondos": "295", "gnome": "134", "plasma": "722"}
+                 "fondos": "295", "gnome": "134", "plasma": "722",
+                 "grub": "109", "sddm": "101", "plymouth": "108"}
 if consulta.startswith("od:"):
     tipo, _, palabras = consulta[3:].partition(" ")
     cat = OD_CATEGORIAS.get(tipo.strip().lower(), "135")
@@ -282,6 +283,31 @@ copiar_temas_sistema() {
         mk "$ICONOS_DIR"; rm -rf "${ICONOS_DIR:?}/$nombre"
         cp -r "$d" "$ICONOS_DIR/$nombre" && rm -rf "$ICONOS_DIR/$nombre/.git" && { sistema=$((sistema + 1)); tipos+=(iconos); }
     done < <(grep -rl --include=index.theme '^Directories=' "$raiz" 2>/dev/null | grep -v '/.git/' | xargs -r -n1 dirname | sort -u)
+    # GRUB (theme.txt), SDDM (metadata.desktop) y Plymouth (*.plymouth): a la carpeta de espera
+    local STAGE="${XDG_DATA_HOME:-$HOME/.local/share}/hyprbazar/sistema"
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        nombre="$(basename "$d")"; [ "$d" = "$raiz" ] && nombre="$nombre_base"
+        # varias versiones con la misma carpeta (1080p, 2k, 4k…) en esta misma instalación: nombre del archivo
+        if [ -e "$STAGE/grub/$nombre" ] && [ -n "${MARCA_INSTALACION:-}" ] && [ "$STAGE/grub/$nombre" -nt "$MARCA_INSTALACION" ]; then
+            nombre="$nombre_base"
+        fi
+        mk "$STAGE/grub"; rm -rf "${STAGE:?}/grub/$nombre"
+        cp -r "$d" "$STAGE/grub/$nombre" && { sistema=$((sistema + 1)); tipos+=(grub); }
+    done < <(find "$raiz" -name theme.txt -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        ls "$d"/*.qml >/dev/null 2>&1 || continue
+        nombre="$(basename "$d")"; [ "$d" = "$raiz" ] && nombre="$nombre_base"
+        mk "$STAGE/sddm"; rm -rf "${STAGE:?}/sddm/$nombre"
+        cp -r "$d" "$STAGE/sddm/$nombre" && { sistema=$((sistema + 1)); tipos+=(sddm); }
+    done < <(find "$raiz" -name metadata.desktop -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        nombre="$(basename "$d")"; [ "$d" = "$raiz" ] && nombre="$nombre_base"
+        mk "$STAGE/plymouth"; rm -rf "${STAGE:?}/plymouth/$nombre"
+        cp -r "$d" "$STAGE/plymouth/$nombre" && { sistema=$((sistema + 1)); tipos+=(plymouth); }
+    done < <(find "$raiz" -name '*.plymouth' -not -path "*/.git/*" -exec dirname {} \; 2>/dev/null | sort -u)
     # Kvantum: carpetas con *.kvconfig
     while IFS= read -r d; do
         [ -n "$d" ] || continue
@@ -295,6 +321,7 @@ copiar_temas_sistema() {
 # Baja los paquetes ya montados de la última «Release» (tar/zip) y copia sus temas.
 descargar_releases() {
     local repo="$1" tmp url n=0
+    MARCA_INSTALACION="$(mktemp)"; sleep 1
     tmp="$(mktemp -d)"
     while IFS=$'\t' read -r url tam; do
         [ -n "$url" ] || continue
@@ -392,6 +419,7 @@ PYGEN
 # Instala un contenido de OpenDesktop (od:<id>): baja sus archivos y copia temas o fondos.
 instalar_od() {
     local id="${1#od:}" info tmp n=0 nombre sistema=0 fondos=0 tipos=()
+    MARCA_INSTALACION="$(mktemp)"; sleep 1
     info="$(curl -sS -m 30 -H 'User-Agent: HyprBazar' "https://api.opendesktop.org/ocs/v1/content/data/$id?format=json")" || { log "no pude leer od:$id"; return 1; }
     nombre="$(printf '%s' "$info" | jq -r '.data[0].name // empty' | tr '/' '-')"
     [ -n "$nombre" ] || { log "no existe od:$id"; return 1; }
