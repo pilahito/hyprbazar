@@ -36,7 +36,8 @@ listar() {
         [ -d "$d" ] || continue
         for t in "$d"/*/; do
             t="${t%/}"
-            [ -d "$t/gtk-3.0" ] || [ -d "$t/gtk-4.0" ] || continue
+            # solo temas visuales: los de "atajos" (Emacs, Default…) no traen gtk.css
+            [ -f "$t/gtk-3.0/gtk.css" ] || [ -f "$t/gtk-4.0/gtk.css" ] || [ -f "$t/gtk-3.0/gtk-dark.css" ] || continue
             printf 'gtk\t%s\t%s\n' "$(basename "$t")" "$t"
         done
     done
@@ -71,8 +72,18 @@ actual() {
     printf 'kvantum\t%s\n' "$kv"
 }
 
+# Copia de seguridad, una sola vez, de los archivos que se van a tocar
+respaldar() {
+    local f
+    for f in "$@"; do
+        [ -f "$f" ] && [ ! -e "$f.antes-hyprbazar" ] && cp -p "$f" "$f.antes-hyprbazar"
+    done
+    return 0
+}
+
 aplicar() {
     local tipo="$1" nombre="$2"
+    respaldar "$HOME/.config/gtk-3.0/settings.ini" "$HOME/.config/gtk-4.0/settings.ini" "$DIR_KVANTUM/kvantum.kvconfig"
     case "$tipo" in
         gtk)
             gsettings set org.gnome.desktop.interface gtk-theme "$nombre"

@@ -4995,6 +4995,7 @@ def _descargar(url: str, destino: Path) -> bool:
 
 # ────────────────────────────── temas del sistema ───────────────────────────
 TEMAS_COMPLETOS = Path.home() / ".config" / "hyprbazar" / "temas-completos.json"
+TEMA_ANTERIOR = Path.home() / ".config" / "hyprbazar" / "tema-anterior.json"
 
 
 def _poner_fondo(ruta):
@@ -5134,6 +5135,10 @@ class SistemaPage(Gtk.Box):
         aplicar_todo.set_tooltip_text("Pone los colores, el fondo y los temas de apps, iconos, cursor y Qt de este tema")
         aplicar_todo.connect("clicked", self.on_aplicar_completo)
         fila.append(aplicar_todo)
+        deshacer = Gtk.Button(label="Deshacer")
+        deshacer.set_tooltip_text("Vuelve exactamente a como lo tenías antes de aplicar el último tema completo")
+        deshacer.connect("clicked", self.on_deshacer)
+        fila.append(deshacer)
         borrar = Gtk.Button(label="Borrar")
         borrar.add_css_class("flat")
         borrar.set_tooltip_text("Borra este tema completo guardado (no desinstala nada)")
@@ -5247,6 +5252,7 @@ class SistemaPage(Gtk.Box):
         self.estado.set_text(f"Aplicando el tema completo {tema['nombre']}…")
 
         def trabajo():
+            self._guardar_anterior()   # para poder deshacer sin perder lo que tenías
             hechos = []
             if tema.get("paleta"):
                 subprocess.run([str(PALETA), "aplicar", tema["paleta"]], capture_output=True, timeout=180)
@@ -5259,6 +5265,56 @@ class SistemaPage(Gtk.Box):
                 _poner_fondo(tema["fondo"])
                 hechos.append("fondo")
             GLib.idle_add(self.estado.set_text, f"Puesto {tema['nombre']}: " + ", ".join(hechos))
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _estado_actual(self):
+        """Lo que está puesto ahora: colores, fondo y temas de apps, iconos, cursor y Qt."""
+        actual = {"nombre": "Lo que tenías antes"}
+        try:
+            actual["paleta"] = (CACHE_PALETAS / "actual").read_text(encoding="utf-8").strip()
+        except Exception:
+            actual["paleta"] = ""
+        try:
+            salida = subprocess.run([str(SISTEMA_BIN), "actual"], capture_output=True, text=True, timeout=20).stdout
+            for linea in salida.splitlines():
+                if "\t" in linea:
+                    tipo, valor = linea.split("\t", 1)
+                    if valor.strip():
+                        actual[tipo] = valor.strip()
+        except Exception:
+            pass
+        fondo = _fondo_actual()
+        if fondo:
+            actual["fondo"] = fondo
+        return actual
+
+    def _guardar_anterior(self):
+        try:
+            TEMA_ANTERIOR.parent.mkdir(parents=True, exist_ok=True)
+            TEMA_ANTERIOR.write_text(json.dumps(self._estado_actual(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    def on_deshacer(self, *_):
+        try:
+            anterior = json.loads(TEMA_ANTERIOR.read_text(encoding="utf-8"))
+        except Exception:
+            self.estado.set_text("No hay nada que deshacer todavía.")
+            return
+        self.estado.set_text("Volviendo a como lo tenías…")
+
+        def trabajo():
+            if anterior.get("paleta"):
+                subprocess.run([str(PALETA), "aplicar", anterior["paleta"]], capture_output=True, timeout=180)
+            else:
+                subprocess.run([str(PALETA), "restaurar"], capture_output=True, timeout=60)
+            for tipo, *_ in TIPOS_SISTEMA:
+                if anterior.get(tipo):
+                    subprocess.run([str(SISTEMA_BIN), "aplicar", tipo, anterior[tipo]], capture_output=True, timeout=30)
+            if anterior.get("fondo") and Path(anterior["fondo"]).is_file():
+                _poner_fondo(anterior["fondo"])
+            GLib.idle_add(self.estado.set_text, "Hecho: vuelto a como lo tenías antes")
+            GLib.idle_add(self.cargar)
         threading.Thread(target=trabajo, daemon=True).start()
 
     def on_guardar_completo(self, *_):
@@ -5304,6 +5360,7 @@ class SistemaPage(Gtk.Box):
         self.estado.set_text(f"Aplicando {nombre}…")
 
         def trabajo():
+            self._guardar_anterior()
             r = subprocess.run([str(SISTEMA_BIN), "aplicar", tipo, nombre], capture_output=True, text=True, timeout=30)
             txt = f"Puesto: {nombre}" if r.returncode == 0 else f"No se pudo aplicar {nombre}: {r.stderr.strip()[-200:]}"
             GLib.idle_add(self.estado.set_text, txt)
