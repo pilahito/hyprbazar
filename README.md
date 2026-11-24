@@ -22,7 +22,8 @@ español y sin tocar tu configuración.
 | **Temas de color** | paletas completas (Catppuccin, Dracula, Nord, Tokyo Night, Kanagawa, Arch…) con **vista previa generada**; aplica bordes, esquinas, huecos, desenfoque, barra de título y colores de kitty |
 | **Complementos** | estado de los plugins de Hyprland (hyprbars, borders-plus-plus, hyprfocus, csgo-vulkan-fix): activarlos, desactivarlos, recompilarlos y actualizar sus fuentes |
 | **Tienda** | busca temas en GitHub, muestra la **captura real** de cada repo, **traduce la descripción al español** y descarga lo aprovechable (paletas, fondos y temas GTK, de iconos, cursores y Kvantum) e **instala solo sus dependencias** desde los repos oficiales de Arch |
-| **Temas del sistema** | temas de **aplicaciones GTK**, **iconos**, **cursores** y **apps Qt (Kvantum)**: elige y aplica cada uno; botón para instalar lo que necesitan |
+| **Temas del sistema** | combina aplicaciones GTK, iconos, cursor y Qt aunque vengan de un tema GNOME o KDE; en «Tema completo» eliges qué partes aplicar y qué partes conservar, puedes guardar la combinación y deshacerla; vista previa del cursor |
+| **Sonido** | mezclador de volumen, sonidos del teclado y posición y visibilidad del indicador de volumen DMS |
 | **Editar colores** | en cada tema de color, **Editar colores** abre un editor y lo guarda como **tema propio** |
 | **Escritorio completo** | en los rices de otros escritorios (BSPWM, i3…), instala ese escritorio **aparte** con sus paquetes (oficiales y AUR) y su configuración, sin tocar tu Hyprland; eliges cuál usar al iniciar sesión |
 
@@ -33,6 +34,34 @@ Y dos cosas que casi nadie hace bien:
   sistema* los deja exactamente como estaban.
 - **Nada de copiar dotfiles ajenos**: nunca se sobrescriben tus binds, tu barra
   ni tu configuración. Solo se añaden temas que tú aplicas cuando quieres.
+
+En **Temas del sistema**, selecciona «Personalizado (temas instalados)» para
+combinar temas GTK, iconos, cursor y Kvantum de cualquier origen. Cada selector
+tiene «Conservar actual» para dejar intacta esa parte. «Aplicar todo» respeta
+los cambios que acabas de elegir; «Guardar como tema completo» los recuerda.
+Las casillas de colores y fondo permiten incluirlos solo si el tema los trae.
+«Deshacer» restaura únicamente las partes que cambiaste.
+
+La galería **Animados** incluye otra colección de GIF y permite buscar en
+español (por ejemplo «juegos», «futurista» o «espacio»); traduce esos términos
+al buscar en los catálogos públicos. Los archivos se descargan únicamente
+cuando los eliges.
+**Más fuentes** abre 4K Wallpapers, MotionBGs, MyLiveWallpapers, DesktopHut,
+WallsFlow, Pixabay, Pexels, Videezy, Wallhaven y Unsplash en el navegador.
+Descarga el fondo que quieras y pulsa **Importar archivo**: imágenes y GIF se
+añaden a Mis fondos; si eliges un vídeo MP4/WebM/MOV/MKV, se convierte una
+muestra de hasta 12 segundos en GIF para reproducirla con el fondo animado de
+este escritorio. El vídeo original no se modifica. La búsqueda directa de
+Pixabay y Pexels requiere una clave API de cada servicio.
+
+En **Temas del sistema**, el cursor seleccionado muestra su dibujo real antes
+de aplicarse. «Más cursores · GNOME Look» abre el catálogo comunitario en la
+**Tienda**: cada tarjeta muestra el nombre y la foto completa, y «Ver dibujos»
+enseña las demás capturas antes de instalar. KDE Store comparte ese catálogo.
+
+En **Sonido**, «Indicador de volumen en pantalla» permite elegir dónde aparece,
+activar los avisos y mostrar el porcentaje. Al pulsar «Aplicar indicador» solo
+se modifican esas opciones de DMS y se conserva una copia de la configuración.
 
 ## Instalación
 

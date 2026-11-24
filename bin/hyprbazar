@@ -2420,6 +2420,46 @@ class Mezclador(Gtk.Box):
         return False
 
 
+DMS_AJUSTES_OSD = Path.home() / ".config" / "dms" / "settings.json"
+POSICIONES_OSD = (
+    "Arriba", "Abajo", "Izquierda", "Derecha",
+    "Arriba centro", "Abajo centro", "Izquierda centro", "Derecha centro",
+)
+
+
+def leer_indicador_volumen():
+    try:
+        datos = json.loads(DMS_AJUSTES_OSD.read_text(encoding="utf-8"))
+        return datos if isinstance(datos, dict) else {}
+    except Exception:
+        return {}
+
+
+def guardar_indicador_volumen(cambios):
+    """Conserva el resto de DMS; el shell observa los cambios del JSON en vivo."""
+    import tempfile
+    datos = json.loads(DMS_AJUSTES_OSD.read_text(encoding="utf-8"))
+    if not isinstance(datos, dict):
+        raise ValueError("La configuración de DMS no es un objeto JSON")
+    permitidos = {"osdPosition", "osdAlwaysShowValue", "osdVolumeEnabled", "osdMediaVolumeEnabled"}
+    if not set(cambios) <= permitidos:
+        raise ValueError("Opción del indicador desconocida")
+    datos.update(cambios)
+    copia = DMS_AJUSTES_OSD.with_name(f"settings.json.antes-volumen-{time.time_ns()}")
+    shutil.copy2(DMS_AJUSTES_OSD, copia)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=DMS_AJUSTES_OSD.parent,
+                                     prefix=".indicador-", suffix=".json", delete=False) as temporal:
+        json.dump(datos, temporal, ensure_ascii=False, indent=2)
+        temporal.write("\n")
+        nombre_temporal = temporal.name
+    try:
+        os.chmod(nombre_temporal, DMS_AJUSTES_OSD.stat().st_mode & 0o777)
+        os.replace(nombre_temporal, DMS_AJUSTES_OSD)
+    finally:
+        Path(nombre_temporal).unlink(missing_ok=True)
+    return copia
+
+
 class SonidoPage(Gtk.Box):
     """Sonido de teclado al escribir: pack, volumen y encendido."""
 
@@ -2571,8 +2611,7 @@ class SonidoPage(Gtk.Box):
         self.mezclador = Mezclador()
         self.mezclador.set_margin_bottom(18)
         self.mezclador.set_size_request(640, -1)
-        # (el mezclador por programa vive en el centro de control de DMS; aquí no se muestra)
-        centro.append(tarjeta)
+        # Mezclador general arriba, sonidos de teclado debajo.
         # fila fija "Sonido de teclas" en el mezclador, unida al deslizador de abajo
         self.fila_teclas = FilaVolumen(
             lambda v: self.escala.set_value(v),
@@ -2581,6 +2620,41 @@ class SonidoPage(Gtk.Box):
         self.fila_teclas.bloquear_al_silenciar = False
         self.mezclador.insertar_fija(self.fila_teclas)
         self._sincronizar_fila_teclas()
+        centro.append(self.mezclador)
+        centro.append(tarjeta)
+
+        indicador = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=9)
+        indicador.add_css_class("tarjeta-ajustes")
+        indicador.set_margin_bottom(18)
+        titulo_indicador = Gtk.Label(label="Indicador de volumen en pantalla", xalign=0)
+        titulo_indicador.add_css_class("title-3")
+        indicador.append(titulo_indicador)
+        explicacion_indicador = Gtk.Label(
+            label="Elige dónde aparece el aviso al cambiar el volumen. Se guarda en DMS y se mantiene al reiniciar.",
+            xalign=0)
+        explicacion_indicador.set_wrap(True)
+        indicador.append(explicacion_indicador)
+        datos_osd = leer_indicador_volumen()
+        linea_pos = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        linea_pos.append(Gtk.Label(label="Posición:"))
+        self.posicion_osd = Gtk.DropDown.new_from_strings(POSICIONES_OSD)
+        self.posicion_osd.set_selected(min(7, max(0, int(datos_osd.get("osdPosition", 5)))))
+        linea_pos.append(self.posicion_osd)
+        indicador.append(linea_pos)
+        self.mostrar_osd = Gtk.CheckButton(label="Mostrar indicador al cambiar el volumen")
+        self.mostrar_osd.set_active(bool(datos_osd.get("osdVolumeEnabled", True)))
+        indicador.append(self.mostrar_osd)
+        self.mostrar_media_osd = Gtk.CheckButton(label="Mostrar volumen de los reproductores")
+        self.mostrar_media_osd.set_active(bool(datos_osd.get("osdMediaVolumeEnabled", True)))
+        indicador.append(self.mostrar_media_osd)
+        self.porcentaje_osd = Gtk.CheckButton(label="Mostrar siempre el porcentaje")
+        self.porcentaje_osd.set_active(bool(datos_osd.get("osdAlwaysShowValue", False)))
+        indicador.append(self.porcentaje_osd)
+        guardar_osd = Gtk.Button(label="Aplicar indicador")
+        guardar_osd.add_css_class("suggested-action")
+        guardar_osd.connect("clicked", self.on_aplicar_indicador)
+        indicador.append(guardar_osd)
+        centro.append(indicador)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
@@ -2594,6 +2668,19 @@ class SonidoPage(Gtk.Box):
         self.append(pie)
         self._listo = True
         self.actualizar_estado()
+
+    def on_aplicar_indicador(self, *_):
+        cambios = {
+            "osdPosition": self.posicion_osd.get_selected(),
+            "osdVolumeEnabled": self.mostrar_osd.get_active(),
+            "osdMediaVolumeEnabled": self.mostrar_media_osd.get_active(),
+            "osdAlwaysShowValue": self.porcentaje_osd.get_active(),
+        }
+        try:
+            guardar_indicador_volumen(cambios)
+            self.estado.set_text("Indicador de volumen configurado; DMS actualizará la pantalla al estar abierto")
+        except Exception as error:  # noqa: BLE001
+            self.estado.set_text(f"No se pudo guardar el indicador: {error}")
 
     # ── helpers ─────────────────────────────────────────────────────────────
     def actualizar_ficha_pack(self):
@@ -2824,7 +2911,7 @@ class VistaCapturas(Gtk.Window):
         cab.set_title_widget(Gtk.Label(label=repo))
         self.set_titlebar(cab)
 
-        ver_github = Gtk.Button(label="Ver en GitHub")
+        ver_github = Gtk.Button(label="Ver en OpenDesktop" if repo.startswith("od:") else "Ver en GitHub")
         ver_github.connect("clicked", lambda *_: abrir_url(pagina_github))
         cab.pack_end(ver_github)
 
@@ -3055,6 +3142,14 @@ class TiendaPage(Gtk.Box):
         ("Barras", "quickshell eww ags waybar polybar",
          "Shells y barras: quickshell, eww, ags, waybar, polybar"),
         ("Catppuccin", "catppuccin", "Catppuccin: la paleta pastel más popular, con temas para casi todo"),
+        ("OpenDesktop · Apps", "od:gtk", "Temas de aplicaciones de gnome-look / OpenDesktop (añade palabras: «od:gtk nord»)"),
+        ("OpenDesktop · Iconos", "od:iconos", "Packs de iconos de OpenDesktop"),
+        ("GNOME Look · Cursores", "od:cursores", "Cursores compartidos en GNOME Look y KDE Store; mira sus fotos antes de instalarlos"),
+        ("OpenDesktop · Qt", "od:kvantum", "Temas Kvantum para apps Qt/KDE de OpenDesktop"),
+        ("OpenDesktop · Fondos", "od:fondos", "Fondos de pantalla de OpenDesktop"),
+        ("OpenDesktop · GRUB", "od:grub", "Temas del menú de arranque"),
+        ("OpenDesktop · Inicio de sesión", "od:sddm", "Temas de la pantalla de inicio de sesión (SDDM)"),
+        ("OpenDesktop · Arranque", "od:plymouth", "Animaciones de arranque (Plymouth)"),
         ("Instalados", None,
          "Los temas que ya tienes descargados en este equipo: aplícalos sin volver a bajarlos"),
     ]
@@ -3260,14 +3355,17 @@ class TiendaPage(Gtk.Box):
 
     def tarjeta(self, r):
         repo = r.get("repo", "")
+        es_cursor = r.get("categoria") == "cursores"
         caja = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         caja.add_css_class("store-card")
 
-        banner = self._banner(r.get("banner") or r.get("imagen", ""), repo, r.get("lenguaje", ""))
+        banner = self._banner(r.get("banner") or r.get("imagen", ""), repo,
+                              r.get("lenguaje", ""), mostrar_entero=es_cursor)
         caja.append(banner)
 
         fila = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        titulo = Gtk.Label(label=repo)
+        titulo = Gtk.Label(label=r.get("nombre") or repo)
+        titulo.set_tooltip_text(repo)
         titulo.set_xalign(0)
         titulo.set_ellipsize(3)
         titulo.add_css_class("store-title")
@@ -3303,13 +3401,13 @@ class TiendaPage(Gtk.Box):
         instalar.connect("clicked", lambda *_, rr=repo, b=instalar: self.instalar(rr, b))
         acciones.append(instalar)
 
-        capturas_btn = Gtk.Button(label="Ver capturas")
+        capturas_btn = Gtk.Button(label="Ver dibujos" if es_cursor else "Ver capturas")
         capturas_btn.add_css_class("flat")
         capturas_btn.set_tooltip_text("Ver las imágenes y vídeos del repo sin salir de la app")
         capturas_btn.connect("clicked", lambda *_, rr=r: self.ver_capturas(rr))
         acciones.append(capturas_btn)
 
-        ver = Gtk.Button(label="Ver en GitHub")
+        ver = Gtk.Button(label="Ver en OpenDesktop" if repo.startswith("od:") else "Ver en GitHub")
         ver.add_css_class("flat")
         ver.connect("clicked", lambda *_, u=r.get("url", ""): abrir_url(u))
         acciones.append(ver)
@@ -3413,7 +3511,7 @@ class TiendaPage(Gtk.Box):
         "Nix": ("#3a5c8a", "#121c2a"), "CSS": ("#3a3a8a", "#12122a"),
     }
 
-    def _banner(self, url, repo, lenguaje=""):
+    def _banner(self, url, repo, lenguaje="", mostrar_entero=False):
         """Captura real del repo si la hay; si no, una portada generada."""
         marco = Gtk.Frame()
         marco.add_css_class("store-banner")
@@ -3421,7 +3519,7 @@ class TiendaPage(Gtk.Box):
         marco.set_size_request(300, 150)
 
         CACHE_TIENDA.mkdir(parents=True, exist_ok=True)
-        clave = hashlib.sha1((url or repo).encode()).hexdigest()[:16]
+        clave = hashlib.sha1((str(mostrar_entero) + (url or repo)).encode()).hexdigest()[:16]
         destino = CACHE_TIENDA / f"banner-{clave}.png"
 
         def poner():
@@ -3432,7 +3530,7 @@ class TiendaPage(Gtk.Box):
             except Exception:
                 return False
             imagen = Gtk.Picture.new_for_paintable(textura)
-            imagen.set_content_fit(Gtk.ContentFit.COVER)
+            imagen.set_content_fit(Gtk.ContentFit.CONTAIN if mostrar_entero else Gtk.ContentFit.COVER)
             imagen.set_can_shrink(True)
             marco.set_child(imagen)
             return False
@@ -3453,7 +3551,8 @@ class TiendaPage(Gtk.Box):
                 except Exception:
                     pass
                 if crudo.exists() and crudo.stat().st_size > 2000:
-                    subprocess.run([magick, str(crudo), "-thumbnail", "480x270^",
+                    subprocess.run([magick, str(crudo), "-thumbnail", "480x270" if mostrar_entero else "480x270^",
+                                    "-background", "none" if mostrar_entero else "black",
                                     "-gravity", "center", "-extent", "480x270",
                                     "-strip", str(destino)], capture_output=True, timeout=40)
                     # si lo descargado no era una imagen de verdad, se descarta
@@ -3754,18 +3853,20 @@ class TiendaPage(Gtk.Box):
             try:
                 r = subprocess.run([str(TIENDA), "instalar", repo],
                                    capture_output=True, text=True, timeout=900)
+                if r.returncode != 0:
+                    raise RuntimeError((r.stderr or r.stdout or "Error de descarga").strip().splitlines()[-1])
                 resumen = (r.stdout or "").strip().splitlines()[-1] if r.stdout.strip() else "instalado"
                 # convertirlo en complemento (Complementos > Temas descargados)
                 subprocess.run([str(PACKS_BIN), "generar", "--red", repo.replace("/", "-")],
                                capture_output=True, text=True, timeout=600)
-            except Exception:
-                resumen = "no se pudo instalar"
+            except Exception as error:  # noqa: BLE001
+                resumen = f"No se pudo instalar {repo}: {str(error)[-160:]}"
             GLib.idle_add(self.fin_instalar, boton, resumen)
 
         threading.Thread(target=trabajo, daemon=True).start()
 
     def fin_instalar(self, boton, resumen):
-        boton.set_label("Instalado")
+        boton.set_label("Instalar" if resumen.startswith("No se pudo instalar") else "Instalado")
         boton.set_sensitive(True)
         self.estado.set_text(resumen)
         self.instalados = self._instalados()
@@ -3775,6 +3876,7 @@ class TiendaPage(Gtk.Box):
             pass
         self.ventana.pagina_paletas.cargar()
         self.ventana.pagina_paletas.generar_previas()
+        self.ventana.pagina_sistema.cargar()
         # repintar los resultados: el repo recién instalado ya puede aplicarse
         if self.resultados:
             self.mostrar(self.resultados)
@@ -4194,6 +4296,8 @@ FUENTES_ANIMADOS = (
     ("Sidmaz666/animated_wallpapers", "gifs/"),
     ("D3Ext/aesthetic-wallpapers", "images/"),
     ("maaGGhourr/gif-wallpapers-for-pc", ""),
+    # Colección adicional con GIFs de distintas temáticas (sin instalar scripts).
+    ("aromEspinoza/desktop-wallpapers", "animated/gifs/"),
 )
 MAX_ANIMADO = 25 * 1024 * 1024      # más grande no compensa (memoria y disco)
 MAX_COMPLETO = 8 * 1024 * 1024      # hasta aquí se baja entero para la miniatura
@@ -4270,7 +4374,7 @@ def lista_animados(forzar=False):
             if ext != ".gif" and not (ext == ".webp" and webp_ok):
                 continue
             tam = int(e.get("size") or 0)
-            if tam < 60 * 1024 or tam > MAX_ANIMADO or PROHIBIDOS_FONDO.search(ruta):
+            if tam < 60 * 1024 or tam > MAX_ANIMADO:
                 continue
             if "preview" in ruta.lower() or e.get("sha") in vistos:
                 continue
@@ -4287,7 +4391,40 @@ def lista_animados(forzar=False):
     if salida:
         CACHE_GALERIA.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(salida, ensure_ascii=False), encoding="utf-8")
-    return salida
+        return salida
+    # Si falla la red, conserva la última lista; no deja la galería vacía.
+    try:
+        return json.loads(cache.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+BUSQUEDAS_ES = {
+    "juego": "game", "juegos": "game", "videojuego": "game",
+    "futurista": "futuristic", "futurismo": "futuristic",
+    "espacio": "space", "galaxia": "galaxy", "ciudad": "city",
+    "ciberpunk": "cyberpunk", "neón": "neon", "neon": "neon",
+    "bosque": "forest", "montaña": "mountain", "coche": "car",
+    "dragón": "dragon", "dragon": "dragon", "fantasía": "fantasy",
+}
+
+SITIOS_FONDOS = (
+    ("4K Wallpapers", "https://4kwallpapers.com/"),
+    ("MotionBGs", "https://motionbgs.com/"),
+    ("MyLiveWallpapers", "https://mylivewallpapers.com/"),
+    ("DesktopHut", "https://www.desktophut.com/"),
+    ("WallsFlow", "https://wallsflow.com/"),
+    ("Pixabay Vídeos", "https://pixabay.com/es/videos/"),
+    ("Pexels Vídeos", "https://www.pexels.com/es-es/videos/"),
+    ("Videezy", "https://www.videezy.com/"),
+    ("Wallhaven", "https://wallhaven.cc/"),
+    ("Unsplash", "https://unsplash.com/"),
+)
+
+
+def terminos_busqueda(texto):
+    """Permite buscar con palabras españolas en catálogos que nombran en inglés."""
+    return " ".join(BUSQUEDAS_ES.get(p.casefold(), p) for p in texto.split())
 
 
 def _miniatura_desde(origen, destino):
@@ -4486,13 +4623,15 @@ class GaleriaPanel(Gtk.Box):
         for _ in range(4):
             threading.Thread(target=self._trabajador, daemon=True).start()
 
-        barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        barra = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         barra.add_css_class("page-toolbar")
+        fila_buscar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        fila_opciones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         volver = Gtk.Button(label="← Mis fondos")
         volver.add_css_class("flat")
         volver.set_tooltip_text("Volver a tus fondos")
         volver.connect("clicked", lambda *_: self.al_volver(self.descargados))
-        barra.append(volver)
+        fila_buscar.append(volver)
         grupo = None
         self.botones_fuente = {}
         for clave, rotulo in (("hd", "Fondos HD"), ("animados", "Animados")):
@@ -4504,18 +4643,39 @@ class GaleriaPanel(Gtk.Box):
                 b.set_group(grupo)
             b.set_active(clave == self.fuente)
             b.connect("toggled", self._on_fuente, clave)
-            barra.append(b)
+            fila_buscar.append(b)
             self.botones_fuente[clave] = b
-        self.busqueda = Gtk.SearchEntry(placeholder_text="Buscar (en inglés: mountain, anime, city, space…)")
+        self.busqueda = Gtk.SearchEntry(placeholder_text="Buscar: juegos, futurista, anime, espacio…")
         self.busqueda.set_hexpand(True)
         self.busqueda.connect("activate", lambda *_: self.recargar())
-        barra.append(self.busqueda)
+        fila_buscar.append(self.busqueda)
+        fuentes = Gtk.MenuButton(label="Más fuentes")
+        fuentes.set_tooltip_text("Explorar sitios de fondos y luego importar el archivo descargado")
+        menu = Gtk.Popover()
+        lista_fuentes = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        lista_fuentes.set_margin_start(8)
+        lista_fuentes.set_margin_end(8)
+        lista_fuentes.set_margin_top(8)
+        lista_fuentes.set_margin_bottom(8)
+        for nombre, url in SITIOS_FONDOS:
+            boton = Gtk.Button(label=nombre)
+            boton.connect("clicked", lambda *_, u=url: (menu.popdown(), abrir_url(u)))
+            lista_fuentes.append(boton)
+        menu.set_child(lista_fuentes)
+        fuentes.set_popover(menu)
+        fila_opciones.append(fuentes)
+        importar = Gtk.Button(label="Importar archivo")
+        importar.set_tooltip_text("Añade un fondo descargado; los vídeos se convierten en GIF para este escritorio")
+        importar.connect("clicked", self.importar_archivo)
+        fila_opciones.append(importar)
         self.orden = Gtk.DropDown.new_from_strings([o[0] for o in self.ORDENES])
         self.orden.connect("notify::selected", lambda *_: self.recargar() if self.iniciada else None)
-        barra.append(self.orden)
+        fila_opciones.append(self.orden)
         self.tipo = Gtk.DropDown.new_from_strings([t[0] for t in self.TIPOS])
         self.tipo.connect("notify::selected", lambda *_: self.recargar() if self.iniciada else None)
-        barra.append(self.tipo)
+        fila_opciones.append(self.tipo)
+        barra.append(fila_buscar)
+        barra.append(fila_opciones)
         self.append(barra)
 
         self.ayuda = Gtk.Label()
@@ -4563,6 +4723,80 @@ class GaleriaPanel(Gtk.Box):
         pie.append(self.btn_descargar)
         self.append(pie)
 
+    def importar_archivo(self, *_):
+        dialogo = Gtk.FileDialog()
+        dialogo.set_title("Elegir fondo descargado")
+        filtro = Gtk.FileFilter()
+        filtro.set_name("Imágenes, GIF y vídeos")
+        for extension in ("gif", "webp", "png", "jpg", "jpeg", "avif", "mp4", "webm", "mov", "mkv"):
+            filtro.add_pattern("*." + extension)
+            filtro.add_pattern("*." + extension.upper())
+        filtros = Gio.ListStore.new(Gtk.FileFilter)
+        filtros.append(filtro)
+        dialogo.set_filters(filtros)
+        dialogo.set_default_filter(filtro)
+        descargas = Path.home() / "Descargas"
+        if descargas.is_dir():
+            dialogo.set_initial_folder(Gio.File.new_for_path(str(descargas)))
+
+        def elegido(objeto, resultado):
+            try:
+                archivo = objeto.open_finish(resultado)
+                ruta = archivo.get_path()
+            except GLib.Error:
+                return
+            if not ruta:
+                self.estado.set_text("Elige un archivo de este equipo.")
+                return
+            self.estado.set_text("Importando fondo…")
+            threading.Thread(target=self._copiar_fondo, args=(Path(ruta),), daemon=True).start()
+
+        dialogo.open(self.padre, None, elegido)
+
+    def _copiar_fondo(self, origen):
+        ext = origen.suffix.lower()
+        video = ext in (".mp4", ".webm", ".mov", ".mkv")
+        if ext not in EXTENSIONES and not video:
+            GLib.idle_add(self.estado.set_text, "Formato de fondo no admitido.")
+            return
+        destino_dir = ANIMADOS if video or ext == ".gif" else DESCARGAS
+        destino_dir.mkdir(parents=True, exist_ok=True)
+        nombre = re.sub(r"[^\w. -]", "", origen.stem).strip() or "fondo"
+        sufijo = hashlib.sha1(str(origen).encode()).hexdigest()[:8]
+        destino = destino_dir / f"{nombre}-{sufijo}{'.gif' if video else ext}"
+        try:
+            if not origen.is_file():
+                raise ValueError("El archivo ya no existe")
+            if video:
+                ffmpeg = shutil.which("ffmpeg")
+                if not ffmpeg:
+                    raise ValueError("Falta ffmpeg para convertir el vídeo en GIF")
+                # El escritorio actual anima GIF; transforma una muestra breve del vídeo.
+                r = subprocess.run([ffmpeg, "-v", "error", "-y", "-i", str(origen),
+                                    "-t", "12", "-vf", "fps=10,scale=720:-1:flags=lanczos",
+                                    "-loop", "0", str(destino)], capture_output=True, timeout=240)
+                if r.returncode != 0:
+                    raise ValueError("No se pudo convertir el vídeo")
+            elif origen.resolve() != destino.resolve():
+                shutil.copy2(origen, destino)
+            if destino.stat().st_size < 1000:
+                raise ValueError("El archivo descargado está vacío o incompleto")
+            LISTA.parent.mkdir(parents=True, exist_ok=True)
+            texto = LISTA.read_text(encoding="utf-8", errors="replace") if LISTA.exists() else ""
+            if str(destino) not in texto:
+                with LISTA.open("a", encoding="utf-8") as fh:
+                    if texto and not texto.endswith("\n"):
+                        fh.write("\n")
+                    fh.write(f"{'Animado' if video or ext == '.gif' else 'Descargado'}: {nombre}|{destino}|{ICONO_POR_DEFECTO}\n")
+            GLib.idle_add(self._fin_importar, destino)
+        except Exception as exc:  # noqa: BLE001
+            GLib.idle_add(self.estado.set_text, f"No se pudo importar: {exc}")
+
+    def _fin_importar(self, destino):
+        self.descargados += 1
+        self.estado.set_text(f"Añadido a Mis fondos: {destino.name}")
+        return False
+
     def activar(self):
         """Se llama al abrir la galería: la primera vez carga los fondos."""
         self.descargados = 0
@@ -4601,6 +4835,7 @@ class GaleriaPanel(Gtk.Box):
         self.btn_mas.set_sensitive(False)
         self.estado.set_text("Buscando fondos…")
         texto = self.busqueda.get_text().strip()
+        texto_catalogo = terminos_busqueda(texto)
         fuente = self.fuente
         orden = self.ORDENES[self.orden.get_selected()][1]
         tipo = self.TIPOS[self.tipo.get_selected()][1]
@@ -4610,7 +4845,7 @@ class GaleriaPanel(Gtk.Box):
             nuevos, hay_mas, error = [], False, ""
             try:
                 if fuente == "hd":
-                    params = {"q": f"{texto} {WALLHAVEN_EXCLUIR}".strip(), "purity": "100",
+                    params = {"q": f"{texto_catalogo} {WALLHAVEN_EXCLUIR}".strip(), "purity": "100",
                               "categories": tipo, "sorting": orden, "atleast": "2560x1440",
                               "ratios": "16x9", "page": str(pagina)}
                     if orden == "random" and self.semilla:
@@ -4633,7 +4868,8 @@ class GaleriaPanel(Gtk.Box):
                     if self.animados is None:
                         self.animados = lista_animados()
                     lista = [a for a in self.animados
-                             if not texto or texto.lower() in (a["nombre"] + " " + a["repo"]).lower()]
+                             if not texto or all(p in (a["nombre"] + " " + a["repo"]).casefold()
+                                                 for p in texto_catalogo.casefold().split())]
                     ini = (pagina - 1) * self.POR_PAGINA
                     nuevos = lista[ini:ini + self.POR_PAGINA]
                     hay_mas = len(lista) > ini + self.POR_PAGINA
@@ -5085,7 +5321,46 @@ TIPOS_SISTEMA = (
     ("iconos", "Iconos", "Iconos de apps y carpetas"),
     ("cursor", "Cursor", "El puntero del ratón"),
     ("kvantum", "Aplicaciones Qt (Kvantum)", "Dolphin, Kate, apps de KDE y Qt"),
+    ("grub", "Menú de arranque (GRUB)", "Lo que ves al encender el PC · pide tu contraseña y guarda copia"),
+    ("sddm", "Inicio de sesión (SDDM)", "La pantalla para entrar · usa «Probar» antes de aplicarlo"),
+    ("plymouth", "Animación de arranque (Plymouth)", "Animación mientras arranca · necesita el paquete plymouth"),
 )
+TIPOS_ROOT = {"grub", "sddm", "plymouth"}
+CONSERVAR_ACTUAL = "Conservar actual"
+
+
+def imagen_cursor(carpeta):
+    """Extrae el dibujo del puntero sin aplicar el tema ni ejecutar su código."""
+    cursor = next((p for n in ("left_ptr", "default", "arrow")
+                   if (p := Path(carpeta) / "cursors" / n).is_file()), None)
+    if cursor is None or not shutil.which("xcur2png"):
+        return None
+    try:
+        clave = hashlib.sha1(f"{cursor.resolve()}:{cursor.stat().st_mtime_ns}".encode()).hexdigest()[:18]
+        cache = CACHE / "cursores"
+        destino = cache / f"{clave}.png"
+        if destino.is_file():
+            return destino
+        cache.mkdir(parents=True, exist_ok=True)
+        import tempfile
+        with tempfile.TemporaryDirectory(dir=cache) as temporal:
+            r = subprocess.run(["xcur2png", "-q", "-d", temporal, "-c", "-", str(cursor)],
+                               capture_output=True, text=True, timeout=15)
+            if r.returncode != 0:
+                return None
+            fotogramas = []
+            for linea in r.stdout.splitlines():
+                partes = linea.split("\t")
+                if len(partes) >= 4 and partes[0].isdigit():
+                    p = Path(partes[3])
+                    if p.is_file() and p.parent == Path(temporal):
+                        fotogramas.append((abs(int(partes[0]) - 64), p))
+            if fotogramas:
+                shutil.copy2(min(fotogramas)[1], destino)
+                return destino
+    except Exception:
+        pass
+    return None
 
 
 class SistemaPage(Gtk.Box):
@@ -5097,6 +5372,9 @@ class SistemaPage(Gtk.Box):
         self.desplegables = {}
         self.actuales = {}
         self.nombres = {tipo: [] for tipo, *_ in TIPOS_SISTEMA}
+        self.rutas_cursores = {}
+        self._preview_cursor_num = 0
+        self._cargando_completo = False
 
         barra = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         barra.add_css_class("page-toolbar")
@@ -5132,7 +5410,7 @@ class SistemaPage(Gtk.Box):
         fila.append(self.desplegable_completo)
         aplicar_todo = Gtk.Button(label="Aplicar todo")
         aplicar_todo.add_css_class("suggested-action")
-        aplicar_todo.set_tooltip_text("Pone los colores, el fondo y los temas de apps, iconos, cursor y Qt de este tema")
+        aplicar_todo.set_tooltip_text("Aplica las opciones marcadas y elegidas abajo; las demás se conservan")
         aplicar_todo.connect("clicked", self.on_aplicar_completo)
         fila.append(aplicar_todo)
         deshacer = Gtk.Button(label="Deshacer")
@@ -5145,6 +5423,16 @@ class SistemaPage(Gtk.Box):
         borrar.connect("clicked", self.on_borrar_completo)
         fila.append(borrar)
         completo.append(fila)
+        opciones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
+        self.usar_paleta = Gtk.CheckButton(label="Aplicar colores del tema")
+        self.usar_fondo = Gtk.CheckButton(label="Aplicar fondo del tema")
+        opciones.append(self.usar_paleta)
+        opciones.append(self.usar_fondo)
+        completo.append(opciones)
+        aviso = Gtk.Label(label="Elige abajo aplicaciones, iconos, cursor y Qt. «Conservar actual» no cambia esa parte.")
+        aviso.set_xalign(0)
+        aviso.add_css_class("dim-label")
+        completo.append(aviso)
         fila2 = Gtk.Box(spacing=8)
         self.nombre_completo = Gtk.Entry(placeholder_text="Nombre para guardar (p. ej. «Mi noche azul»)", hexpand=True)
         fila2.append(self.nombre_completo)
@@ -5172,16 +5460,42 @@ class SistemaPage(Gtk.Box):
             caja.append(r)
             caja.append(a)
             rejilla.attach(caja, 0, fila, 1, 1)
-            desplegable = Gtk.DropDown.new_from_strings([])
+            desplegable = Gtk.DropDown.new_from_strings([CONSERVAR_ACTUAL])
             desplegable.set_hexpand(True)
             self.desplegables[tipo] = desplegable
+            if tipo == "cursor":
+                desplegable.connect("notify::selected", self.on_cursor_elegido)
             rejilla.attach(desplegable, 1, fila, 1, 1)
             boton = Gtk.Button(label="Aplicar")
             boton.add_css_class("suggested-action")
             boton.connect("clicked", self.on_aplicar, tipo)
             rejilla.attach(boton, 2, fila, 1, 1)
+            if tipo == "sddm":
+                probar = Gtk.Button(label="Probar")
+                probar.set_tooltip_text("Abre este tema de inicio de sesión en una ventana de prueba, sin aplicarlo")
+                probar.connect("clicked", self.on_probar_sddm)
+                rejilla.attach(probar, 3, fila, 1, 1)
+        fila_cursor = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        fila_cursor.set_margin_start(24)
+        fila_cursor.set_margin_end(24)
+        fila_cursor.set_margin_bottom(14)
+        self.vista_cursor = Gtk.Picture.new_for_paintable(None)
+        self.vista_cursor.set_content_fit(Gtk.ContentFit.CONTAIN)
+        self.vista_cursor.set_size_request(85, 70)
+        fila_cursor.append(self.vista_cursor)
+        self.texto_cursor = Gtk.Label(label="Elige un cursor para ver su dibujo", xalign=0)
+        self.texto_cursor.set_hexpand(True)
+        self.texto_cursor.add_css_class("dim-label")
+        fila_cursor.append(self.texto_cursor)
+        buscar_cursores = Gtk.Button(label="Más cursores · GNOME Look")
+        buscar_cursores.set_tooltip_text("Mira las fotos de los cursores antes de descargarlos")
+        buscar_cursores.connect("clicked", self.on_buscar_cursores)
+        fila_cursor.append(buscar_cursores)
+        contenido = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        contenido.append(rejilla)
+        contenido.append(fila_cursor)
         scroll = Gtk.ScrolledWindow(vexpand=True)
-        scroll.set_child(rejilla)
+        scroll.set_child(contenido)
         self.append(scroll)
 
         self.estado = Gtk.Label(label="Cargando temas instalados…")
@@ -5203,68 +5517,130 @@ class SistemaPage(Gtk.Box):
 
     def _pintar(self, lista, actual):
         nombres = {tipo: [] for tipo, *_ in TIPOS_SISTEMA}
+        self.rutas_cursores = {}
         for linea in lista.splitlines():
             partes = linea.split("\t")
             if len(partes) >= 2 and partes[0] in nombres and partes[1] not in nombres[partes[0]]:
                 nombres[partes[0]].append(partes[1])
+                if partes[0] == "cursor" and len(partes) >= 3:
+                    self.rutas_cursores[partes[1]] = partes[2]
         self.actuales = dict(l.split("\t", 1) for l in actual.splitlines() if "\t" in l)
         total = 0
         for tipo, desplegable in self.desplegables.items():
             lista_tipo = sorted(nombres[tipo], key=str.casefold)
             self.nombres[tipo] = lista_tipo
-            desplegable.set_model(Gtk.StringList.new(lista_tipo or ["(ninguno instalado)"]))
+            desplegable.set_model(Gtk.StringList.new([CONSERVAR_ACTUAL] + lista_tipo))
             puesto = self.actuales.get(tipo, "")
             if puesto in lista_tipo:
-                desplegable.set_selected(lista_tipo.index(puesto))
+                desplegable.set_selected(lista_tipo.index(puesto) + 1)
             total += len(lista_tipo)
         self.estado.set_text(f"{total} temas del sistema instalados · los de la Tienda aparecen aquí al instalarlos")
         self._cargar_completos()
         return False
 
+    def on_buscar_cursores(self, *_):
+        self.ventana.pila.set_visible_child_name("tienda")
+        self.ventana.pagina_tienda.buscar("od:cursores")
+
+    def on_cursor_elegido(self, *_):
+        lista = self.nombres.get("cursor") or []
+        indice = self.desplegables["cursor"].get_selected() - 1
+        nombre = lista[indice] if 0 <= indice < len(lista) else ""
+        self._preview_cursor_num += 1
+        numero = self._preview_cursor_num
+        self.vista_cursor.set_paintable(None)
+        self.texto_cursor.set_text(f"Dibujo de {nombre}…" if nombre else "Conservar el cursor actual")
+        ruta = self.rutas_cursores.get(nombre)
+        if ruta:
+            def cargar():
+                imagen = imagen_cursor(ruta)
+                GLib.idle_add(self._mostrar_cursor, numero, nombre, imagen)
+            threading.Thread(target=cargar, daemon=True).start()
+
+    def _mostrar_cursor(self, numero, nombre, imagen):
+        if numero != self._preview_cursor_num:
+            return False
+        if imagen:
+            try:
+                self.vista_cursor.set_paintable(Gdk.Texture.new_from_filename(str(imagen)))
+                self.texto_cursor.set_text(f"Dibujo real: {nombre}")
+                return False
+            except Exception:
+                pass
+        self.texto_cursor.set_text(f"{nombre}: no hay vista previa local")
+        return False
+
     # ── temas completos ──
     def _cargar_completos(self, elegir=None):
+        anterior = elegir or (self._completo_elegido() or {}).get("nombre")
+        self._cargando_completo = True
         self.completos = leer_temas_completos()
-        nombres = [t["nombre"] for t in self.completos] or ["(todavía no hay ninguno)"]
+        nombres = [t["nombre"] for t in self.completos] + ["Personalizado (temas instalados)"]
         self.desplegable_completo.set_model(Gtk.StringList.new(nombres))
-        if elegir in nombres:
-            self.desplegable_completo.set_selected(nombres.index(elegir))
+        self.desplegable_completo.set_selected(nombres.index(anterior) if anterior in nombres else len(nombres) - 1)
+        self._cargando_completo = False
+        self.on_elegir_completo()
 
     def _completo_elegido(self):
         i = self.desplegable_completo.get_selected()
         return self.completos[i] if 0 <= i < len(self.completos) else None
 
     def on_elegir_completo(self, *_):
+        if self._cargando_completo:
+            return
         tema = self._completo_elegido()
         if not tema:
+            self.usar_paleta.set_active(False)
+            self.usar_fondo.set_active(False)
+            for desplegable in self.desplegables.values():
+                desplegable.set_selected(0)
             return
         self.nombre_completo.set_text(tema["nombre"])
+        self.usar_paleta.set_active(bool(tema.get("paleta")))
+        self.usar_fondo.set_active(bool(tema.get("fondo")))
         # enseñar sus valores abajo para poder editarlos
         for tipo, desplegable in self.desplegables.items():
             valor = tema.get(tipo)
             if valor and valor in self.nombres.get(tipo, []):
-                desplegable.set_selected(self.nombres[tipo].index(valor))
+                desplegable.set_selected(self.nombres[tipo].index(valor) + 1)
+            else:
+                desplegable.set_selected(0)
 
     def on_aplicar_completo(self, *_):
         tema = self._completo_elegido()
-        if not tema:
-            self.estado.set_text("Primero guarda o instala un tema completo.")
+        seleccion = {"nombre": tema["nombre"] if tema else "Personalizado"}
+        for campo, boton in (("paleta", self.usar_paleta), ("fondo", self.usar_fondo)):
+            if tema and boton.get_active() and tema.get(campo):
+                seleccion[campo] = tema[campo]
+        for tipo, desplegable in self.desplegables.items():
+            indice = desplegable.get_selected() - 1
+            if 0 <= indice < len(self.nombres[tipo]):
+                seleccion[tipo] = self.nombres[tipo][indice]
+        if len(seleccion) == 1:
+            self.estado.set_text("Selecciona al menos una parte del tema para aplicar.")
             return
-        self.estado.set_text(f"Aplicando el tema completo {tema['nombre']}…")
+        self.estado.set_text(f"Aplicando {seleccion['nombre']}…")
 
         def trabajo():
-            self._guardar_anterior()   # para poder deshacer sin perder lo que tenías
+            self._guardar_anterior(seleccion)   # para deshacer solo las partes modificadas
             hechos = []
-            if tema.get("paleta"):
-                subprocess.run([str(PALETA), "aplicar", tema["paleta"]], capture_output=True, timeout=180)
-                hechos.append("colores")
+            fallos = []
+            if seleccion.get("paleta"):
+                r = subprocess.run([str(PALETA), "aplicar", seleccion["paleta"]], capture_output=True, text=True, timeout=180)
+                (hechos if r.returncode == 0 else fallos).append("colores")
             for tipo, *_ in TIPOS_SISTEMA:
-                if tema.get(tipo):
-                    if subprocess.run([str(SISTEMA_BIN), "aplicar", tipo, tema[tipo]], capture_output=True, timeout=30).returncode == 0:
-                        hechos.append(tipo)
-            if tema.get("fondo") and Path(tema["fondo"]).is_file():
-                _poner_fondo(tema["fondo"])
+                if seleccion.get(tipo):
+                    r = subprocess.run([str(SISTEMA_BIN), "aplicar", tipo, seleccion[tipo]], capture_output=True, text=True, timeout=30)
+                    (hechos if r.returncode == 0 else fallos).append(tipo)
+            if seleccion.get("fondo") and Path(seleccion["fondo"]).is_file():
+                _poner_fondo(seleccion["fondo"])
                 hechos.append("fondo")
-            GLib.idle_add(self.estado.set_text, f"Puesto {tema['nombre']}: " + ", ".join(hechos))
+            elif seleccion.get("fondo"):
+                fallos.append("fondo (archivo no encontrado)")
+            mensaje = f"Puesto {seleccion['nombre']}: " + ", ".join(hechos)
+            if fallos:
+                mensaje += " · no se pudo aplicar: " + ", ".join(fallos)
+            GLib.idle_add(self.estado.set_text, mensaje)
         threading.Thread(target=trabajo, daemon=True).start()
 
     def _estado_actual(self):
@@ -5288,10 +5664,12 @@ class SistemaPage(Gtk.Box):
             actual["fondo"] = fondo
         return actual
 
-    def _guardar_anterior(self):
+    def _guardar_anterior(self, campos=None):
         try:
             TEMA_ANTERIOR.parent.mkdir(parents=True, exist_ok=True)
-            TEMA_ANTERIOR.write_text(json.dumps(self._estado_actual(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            anterior = self._estado_actual()
+            anterior["_campos"] = [c for c in (campos or ()) if c in ("paleta", "fondo", *(t for t, *_ in TIPOS_SISTEMA))]
+            TEMA_ANTERIOR.write_text(json.dumps(anterior, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         except Exception:
             pass
 
@@ -5304,14 +5682,16 @@ class SistemaPage(Gtk.Box):
         self.estado.set_text("Volviendo a como lo tenías…")
 
         def trabajo():
-            if anterior.get("paleta"):
-                subprocess.run([str(PALETA), "aplicar", anterior["paleta"]], capture_output=True, timeout=180)
-            else:
-                subprocess.run([str(PALETA), "restaurar"], capture_output=True, timeout=60)
+            campos = anterior.get("_campos", ["paleta", "fondo", *(t for t, *_ in TIPOS_SISTEMA)])
+            if "paleta" in campos:
+                if anterior.get("paleta"):
+                    subprocess.run([str(PALETA), "aplicar", anterior["paleta"]], capture_output=True, timeout=180)
+                else:
+                    subprocess.run([str(PALETA), "restaurar"], capture_output=True, timeout=60)
             for tipo, *_ in TIPOS_SISTEMA:
-                if anterior.get(tipo):
+                if tipo in campos and anterior.get(tipo):
                     subprocess.run([str(SISTEMA_BIN), "aplicar", tipo, anterior[tipo]], capture_output=True, timeout=30)
-            if anterior.get("fondo") and Path(anterior["fondo"]).is_file():
+            if "fondo" in campos and anterior.get("fondo") and Path(anterior["fondo"]).is_file():
                 _poner_fondo(anterior["fondo"])
             GLib.idle_add(self.estado.set_text, "Hecho: vuelto a como lo tenías antes")
             GLib.idle_add(self.cargar)
@@ -5323,21 +5703,24 @@ class SistemaPage(Gtk.Box):
             self.estado.set_text("Escribe un nombre para el tema completo.")
             return
         tema = {"nombre": nombre}
-        try:
-            tema["paleta"] = (CACHE_PALETAS / "actual").read_text(encoding="utf-8").strip()
-        except Exception:
-            pass
-        tema_fondo = _fondo_actual()
-        if tema_fondo:
-            tema["fondo"] = tema_fondo
+        seleccionado = self._completo_elegido() or {}
+        if self.usar_paleta.get_active():
+            try:
+                tema["paleta"] = seleccionado.get("paleta") or (CACHE_PALETAS / "actual").read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+        if self.usar_fondo.get_active():
+            tema_fondo = seleccionado.get("fondo") or _fondo_actual()
+            if tema_fondo:
+                tema["fondo"] = tema_fondo
         for tipo, desplegable in self.desplegables.items():
             lista = self.nombres.get(tipo) or []
-            i = desplegable.get_selected()
+            i = desplegable.get_selected() - 1
             if lista and 0 <= i < len(lista):
                 tema[tipo] = lista[i]
         guardar_tema_completo(tema)
         self._cargar_completos(elegir=nombre)
-        self.estado.set_text(f"Guardado «{nombre}»: colores, fondo y temas de apps, iconos, cursor y Qt")
+        self.estado.set_text(f"Guardado «{nombre}»: solo las partes elegidas; las demás se conservan")
 
     def on_borrar_completo(self, *_):
         tema = self._completo_elegido()
@@ -5352,7 +5735,7 @@ class SistemaPage(Gtk.Box):
 
     def on_aplicar(self, _boton, tipo):
         lista = self.nombres.get(tipo) or []
-        i = self.desplegables[tipo].get_selected()
+        i = self.desplegables[tipo].get_selected() - 1
         if not lista or i >= len(lista):
             self.estado.set_text("No hay ningún tema de ese tipo instalado. Búscalos en la Tienda.")
             return
@@ -5360,11 +5743,20 @@ class SistemaPage(Gtk.Box):
         self.estado.set_text(f"Aplicando {nombre}…")
 
         def trabajo():
-            self._guardar_anterior()
+            self._guardar_anterior((tipo,))
             r = subprocess.run([str(SISTEMA_BIN), "aplicar", tipo, nombre], capture_output=True, text=True, timeout=30)
             txt = f"Puesto: {nombre}" if r.returncode == 0 else f"No se pudo aplicar {nombre}: {r.stderr.strip()[-200:]}"
             GLib.idle_add(self.estado.set_text, txt)
         threading.Thread(target=trabajo, daemon=True).start()
+
+    def on_probar_sddm(self, _boton):
+        lista = self.nombres.get("sddm") or []
+        i = self.desplegables["sddm"].get_selected()
+        if not lista or i >= len(lista):
+            return
+        subprocess.Popen([str(SISTEMA_BIN), "probar", "sddm", lista[i]],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.estado.set_text(f"Probando «{lista[i]}»: ciérralo cuando acabes (no se ha aplicado nada)")
 
     def on_deps(self, _boton):
         self.estado.set_text("Instalando lo necesario… (se te pedirá la contraseña)")

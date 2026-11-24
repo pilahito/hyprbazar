@@ -144,6 +144,8 @@ if consulta.startswith("od:"):
         return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", h or "")).strip()[:300]
     for it in items:
         imgs = [it[k] for k in sorted(it) if k.startswith("previewpic") and it.get(k)]
+        if not imgs and it.get("smallpreviewpic1"):
+            imgs = [it["smallpreviewpic1"]]
         desc = texto_plano(it.get("description") or it.get("summary"))
         print(json.dumps({
             "repo": "od:" + str(it.get("id")),
@@ -158,6 +160,7 @@ if consulta.startswith("od:"):
             "capturas": imgs,
             "temas": [it.get("typename") or "OpenDesktop"],
             "lenguaje": "OpenDesktop",
+            "categoria": tipo,
             "actualizado": (it.get("changed") or "")[:10],
         }, ensure_ascii=False))
     sys.exit(0)
