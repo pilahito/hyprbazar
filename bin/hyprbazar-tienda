@@ -128,8 +128,10 @@ OD_CATEGORIAS = {"gtk": "135", "iconos": "132", "cursores": "107", "kvantum": "1
                  "grub": "109", "sddm": "101", "plymouth": "108"}
 if consulta.startswith("od:"):
     tipo, _, palabras = consulta[3:].partition(" ")
+    tipo, _, pag = tipo.partition(":")          # «od:gtk:2 palabras» = página 2
+    pagina = int(pag) if pag.isdigit() else 0
     cat = OD_CATEGORIAS.get(tipo.strip().lower(), "135")
-    url = ("https://api.opendesktop.org/ocs/v1/content/data?format=json&sortmode=high&pagesize=24&categories=" + cat
+    url = ("https://api.opendesktop.org/ocs/v1/content/data?format=json&sortmode=high&pagesize=24&page=" + str(pagina) + "&categories=" + cat
            + ("&search=" + urllib.parse.quote(palabras.strip()) if palabras.strip() else ""))
     try:
         datos = pet(url, {"User-Agent": "HyprBazar"})
@@ -456,7 +458,7 @@ for k in sorted(d):
         mapfile -t tipos < <(printf '%s\n' "${tipos[@]}" | sort -u)
         [ -x "$sis" ] && "$sis" instalar-deps "${tipos[@]}"
     fi
-    printf 'instalado od:%s: 0 paletas, %s fondos, %s temas del sistema\n' "$id" "$fondos" "$sistema"
+    printf 'instalado od:%s: %s fondos, %s temas del sistema\n' "$id" "$fondos" "$sistema"
 }
 
 instalar() {

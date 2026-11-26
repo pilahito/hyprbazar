@@ -3,6 +3,7 @@
 #
 #   ./install.sh            instala/actualiza
 #   ./install.sh --check    solo comprueba dependencias
+#   ./install.sh --desinstalar   quita HyprBazar (no toca tus temas ni tu configuración)
 set -euo pipefail
 
 AQUI="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -26,8 +27,17 @@ if [ "${1:-}" = "--check" ]; then
     exit 0
 fi
 
+if [ "${1:-}" = "--desinstalar" ]; then
+    for f in hyprbazar hyprbazar-paleta hyprbazar-tienda hyprbazar-tema hyprbazar-packs hyprbazar-teclas hyprbazar-sistema hyprbazar-escritorio teclado-sonido; do
+        rm -f "$BIN/$f"
+    done
+    rm -f "$APPS/es.david.HyprBazar.desktop"
+    echo "HyprBazar desinstalado. Tus temas, fondos y configuración no se han tocado."
+    exit 0
+fi
+
 # Dependencias: en Arch se instalan solas (pide tu contraseña); en otras distros se avisa.
-PAQUETES=(python-gobject gtk4 imagemagick jq curl git glib2 polkit)
+PAQUETES=(python-gobject gtk4 imagemagick jq curl git glib2 polkit wl-clipboard)
 if [ ${#falta[@]} -ne 0 ]; then
     if command -v pacman >/dev/null 2>&1 && [ "${SIN_DEPS:-0}" != "1" ]; then
         echo "Instalando dependencias: ${PAQUETES[*]}"
@@ -76,6 +86,8 @@ DESK
 update-desktop-database "$APPS" >/dev/null 2>&1 || true
 # limpiar el nombre antiguo del lanzador, si quedó de una versión anterior
 rm -f "$APPS/hyprbazar.desktop" 2>/dev/null || true
+
+case ":$PATH:" in *":$BIN:"*) ;; *) echo "AVISO: $BIN no está en tu PATH; añade a tu shell:  export PATH=\"$BIN:\$PATH\"" >&2 ;; esac
 
 cat <<'FIN'
 

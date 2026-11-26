@@ -65,14 +65,17 @@ se modifican esas opciones de DMS y se conserva una copia de la configuración.
 
 ## Instalación
 
+Una sola línea (en Arch pide tu contraseña solo para instalar dependencias):
+
 ```bash
-git clone https://github.com/pilahito/hyprbazar.git
-cd hyprbazar
-./install.sh
+git clone https://github.com/pilahito/hyprbazar.git && cd hyprbazar && ./install.sh
 ```
 
-Deja los ejecutables en `~/.local/bin`, crea la entrada de menú y comprueba las
-dependencias.
+Deja los ejecutables en `~/.local/bin`, crea la entrada de menú, el icono y
+**instala solo las dependencias que falten**. Si algo no se puede instalar, te
+dice exactamente qué comando ejecutar. Para actualizar, vuelve a ejecutar
+`./install.sh`; para quitarlo, `./install.sh --desinstalar` (no toca tus temas
+ni tu configuración).
 
 **Dependencias**: `python3` con PyGObject (GTK 4), `imagemagick`, `jq`, `curl`,
 `git` y `wl-clipboard`.
@@ -80,6 +83,11 @@ dependencias.
 ```bash
 sudo pacman -S python-gobject gtk4 imagemagick jq curl git wl-clipboard
 ```
+
+**Novedades**: la Tienda pagina el contenido de OpenDesktop, hay una pestaña
+**Vista previa** (solo lectura) para ver cómo quedará el tema, y el instalador
+de **Escritorio completo** funciona en cola: una instalación a la vez y, si
+`pacman` falla, lo dice en lugar de dar el trabajo por hecho.
 
 ## Uso
 

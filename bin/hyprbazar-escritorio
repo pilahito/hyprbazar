@@ -95,6 +95,9 @@ revisar() {
 }
 
 instalar() {
+    # Una sola instalación a la vez y en orden: la siguiente espera su turno (pacman bloquea su base de datos).
+    exec 9>"${XDG_RUNTIME_DIR:-/tmp}/hyprbazar-escritorio.lock"
+    if ! flock -n 9; then log "hay otra instalación en curso; espero mi turno…"; flock 9; fi
     local dir; dir="$(repo_local "$1")" || return 1
     local lista oficiales aur
     lista="$(paquetes_del_repo "$dir" | clasificar)"
@@ -103,7 +106,7 @@ instalar() {
 
     if [ "${#oficiales[@]}" -gt 0 ]; then
         log "instalando ${#oficiales[@]} paquetes oficiales…"
-        como_root pacman -S --needed --noconfirm "${oficiales[@]}" || log "algunos paquetes oficiales no se instalaron"
+        como_root pacman -S --needed --noconfirm "${oficiales[@]}" || { log "ERROR: pacman no pudo instalar los paquetes; no sigo (revisa el mensaje de arriba)"; return 1; }
     fi
     if [ "${#aur[@]}" -gt 0 ]; then
         local ayudante; ayudante="$(command -v paru || command -v yay || true)"
