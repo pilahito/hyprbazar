@@ -84,6 +84,8 @@ ni tu configuración).
 sudo pacman -S python-gobject gtk4 imagemagick jq curl git wl-clipboard
 ```
 
+**Escritorio completo con cualquier rice**: lee la lista de paquetes del repo (listas de texto, variables de sus scripts o los `pacman/yay/paru -S` de su README), descarta palabras que no son paquetes y te enseña todo antes de instalar. Si un repo no declara sus paquetes, te avisa en vez de decir «listo». Las configuraciones que ya tienes nunca se pisan.
+
 **Novedades**: la Tienda pagina el contenido de OpenDesktop, hay una pestaña
 **Vista previa** (solo lectura) para ver cómo quedará el tema, y el instalador
 de **Escritorio completo** funciona en cola: una instalación a la vez y, si
